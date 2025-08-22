@@ -732,8 +732,6 @@ class CopyTradingEngine:
             else:
                 logger.info(f"✅ Order {order_id} is recent - processing")
             
-            logger.info(f"🎯 TIME FILTERING COMPLETE: Order {order_id} ({order_status}) passed time checks - proceeding to duplicate check")
-            
             # Check if this order is from before restart (prevent duplicate processing)
             if master_id in self.last_processed_order_time:
                 if order_time < self.last_processed_order_time[master_id]:
@@ -743,12 +741,9 @@ class CopyTradingEngine:
             # Check if we've already processed this order
             if master_id not in self.processed_orders:
                 self.processed_orders[master_id] = set()
-                logger.info(f"🆕 Initialized processed_orders for master {master_id}")
+                logger.debug(f"🆕 Initialized processed_orders for master {master_id}")
             
-            logger.info(f"🔍 DUPLICATE CHECK: Checking if order {order_id} was already processed...")
-            logger.info(f"🔍 Current processed_orders for master {master_id}: {len(self.processed_orders[master_id])} orders")
             if order_id in self.processed_orders[master_id]:
-                logger.info(f"⏭️ Order {order_id} found in processed_orders cache - checking database...")
                 # Check if the order actually exists in the database with proper error handling
                 session_check = None
                 try:
@@ -759,7 +754,7 @@ class CopyTradingEngine:
                     ).first()
                     
                     if existing_trade:
-                        logger.info(f"✅ Order {order_id} exists in database, skipping duplicate processing")
+                        logger.debug(f"✅ Order {order_id} exists in database, skipping")
                         # For cancelled orders, still check if we need to handle follower cancellations
                         if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED'] and existing_trade.status != 'CANCELLED':
                             logger.info(f"🔄 Order {order_id} status changed to CANCELLED - handling follower cancellations")
@@ -769,7 +764,7 @@ class CopyTradingEngine:
                             session_check.close()
                         return
                     else:
-                        logger.warning(f"🔄 Order {order_id} NOT in database but was in processed_orders - reprocessing...")
+                        logger.warning(f"🔄 Order {order_id} NOT in database - reprocessing...")
                         # Remove from processed set so we can reprocess
                         self.processed_orders[master_id].discard(order_id)
                         
@@ -783,10 +778,7 @@ class CopyTradingEngine:
                             session_check.close()
                         except Exception as cleanup_error:
                             logger.error(f"❌ Error closing database session: {cleanup_error}")
-            else:
-                logger.info(f"✅ FRESH ORDER: {order_id} not in processed_orders cache - proceeding with processing")
             
-            logger.info(f"🎯 CONTINUING TO PROCESS: Order {order_id} passed all checks - proceeding to database creation")
             logger.info(f"📋 Processing NEW master order: {order['symbol']} {order['side']} {original_qty} - Status: {order_status}")
             
             # Mark this order as processed (with cleanup to prevent memory leaks)
