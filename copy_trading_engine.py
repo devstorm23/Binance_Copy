@@ -783,7 +783,7 @@ class CopyTradingEngine:
             
             # Mark this order as processed (with cleanup to prevent memory leaks)
             self.processed_orders[master_id].add(order_id)
-            logger.debug(f"✔️ Marked order {order_id} as processed")
+            logger.info(f"✔️ Marked order {order_id} as processed - now proceeding to database creation")
             
             # Clean up old processed orders to prevent memory leaks (keep only last 1000)
             if len(self.processed_orders[master_id]) > 1000:
@@ -884,38 +884,42 @@ class CopyTradingEngine:
             session.refresh(db_trade)
             logger.info(f"✅ Trade {db_trade.id} saved to database successfully")
             
-            # Copy to followers for NEW orders and FILLED orders  
-            # Also handle case where we missed the NEW state and only see FILLED
-            if order_status in ['NEW', 'FILLED']:
-                logger.info(f"🚀 Copying {order_status.lower()} order to followers immediately")
-                
-                # For FILLED orders, check if we already copied this as NEW to avoid duplicates
-                if order_status == 'FILLED':
-                    existing_copy = session.query(Trade).filter(
-                        Trade.master_trade_id == db_trade.id,
-                        Trade.copied_from_master == True
-                    ).first()
-                    
-                    if existing_copy:
-                        logger.info(f"📝 FILLED order already copied when it was NEW, skipping duplicate")
-                        session.close()
-                        return
-                    else:
-                        logger.info(f"🎯 FILLED order was not copied as NEW - copying now (this handles fast-filling orders)")
-                
-                # ENHANCED: Check if this is a position closing order with multiple detection methods
-                is_reduce_only = order.get('reduceOnly', False)
-                is_position_closing = await self.is_position_closing_order(master_id, db_trade, session)
-                
-                if is_reduce_only:
-                    logger.info(f"🔄 REDUCE_ONLY flag detected - closing follower positions")
-                    await self.close_follower_positions(db_trade, session)
-                elif is_position_closing:
-                    logger.info(f"🔄 Position closing detected via analysis - closing follower positions")
-                    await self.close_follower_positions(db_trade, session)
-                else:
-                    logger.info(f"📈 Regular trade order - copying to followers")
-                    await self.copy_trade_to_followers(db_trade, session)
+                         # Copy to followers for NEW orders and FILLED orders  
+             # Also handle case where we missed the NEW state and only see FILLED
+             if order_status in ['NEW', 'FILLED']:
+                 logger.info(f"🚀 PROCESSING {order_status} ORDER: About to copy {order_status.lower()} order to followers")
+                 
+                 # For FILLED orders, check if we already copied this as NEW to avoid duplicates
+                 if order_status == 'FILLED':
+                     existing_copy = session.query(Trade).filter(
+                         Trade.master_trade_id == db_trade.id,
+                         Trade.copied_from_master == True
+                     ).first()
+                     
+                     if existing_copy:
+                         logger.info(f"📝 FILLED order already copied when it was NEW, skipping duplicate")
+                         session.close()
+                         return
+                     else:
+                         logger.info(f"🎯 FILLED order was not copied as NEW - copying now (this handles fast-filling orders)")
+                 
+                 # ENHANCED: Check if this is a position closing order with multiple detection methods
+                 logger.info(f"🔍 STARTING POSITION ANALYSIS: Checking if {db_trade.symbol} {db_trade.side} {db_trade.quantity} is position closing...")
+                 is_reduce_only = order.get('reduceOnly', False)
+                 logger.info(f"🔍 REDUCE_ONLY CHECK: Order has reduceOnly={is_reduce_only}")
+                 
+                 is_position_closing = await self.is_position_closing_order(master_id, db_trade, session)
+                 logger.info(f"🔍 POSITION CLOSING ANALYSIS RESULT: is_position_closing={is_position_closing}")
+                 
+                 if is_reduce_only:
+                     logger.info(f"🔄 REDUCE_ONLY DETECTED: Closing follower positions due to reduceOnly flag")
+                     await self.close_follower_positions(db_trade, session)
+                 elif is_position_closing:
+                     logger.info(f"🔄 POSITION CLOSING DETECTED: Closing follower positions via analysis")
+                     await self.close_follower_positions(db_trade, session)
+                 else:
+                     logger.info(f"📈 REGULAR TRADE DETECTED: Copying to followers as new trade")
+                     await self.copy_trade_to_followers(db_trade, session)
                     
             elif order_status == 'PARTIALLY_FILLED':
                 # For partially filled orders, check if we already copied this order
@@ -1719,9 +1723,9 @@ class CopyTradingEngine:
                 logger.warning(f"⚠️ Master client not found for position check: {master_id}")
                 return False
             
-            # STEP 0: DIRECT FOLLOWER POSITION CHECK (Most reliable method)
-            # Check if there are follower positions that could be closed by this trade
-            logger.info(f"🔍 Checking follower positions for potential closing...")
+            # STEP 0: DIRECT FOLLOWER POSITION CHECK (Most reliable method for delayed closing)
+            # This is the PRIMARY method for detecting delayed position closing scenarios
+            logger.info(f"🔍 DELAYED CLOSING CHECK: Checking follower positions for potential closing...")
             
             # Get copy trading configurations
             configs = session.query(CopyTradingConfig).filter(
@@ -1730,25 +1734,45 @@ class CopyTradingEngine:
             ).all()
             
             has_follower_positions_to_close = False
+            follower_positions_details = []
+            
             for config in configs:
                 follower_client = self.follower_clients.get(config.follower_account_id)
                 if follower_client:
                     try:
                         follower_positions = await follower_client.get_positions()
+                        logger.info(f"🔍 Follower {config.follower_account_id}: Found {len(follower_positions)} total positions")
+                        
                         for pos in follower_positions:
-                            if (pos['symbol'] == trade.symbol and 
-                                abs(float(pos['size'])) > 0.001 and
-                                ((pos['side'] == 'LONG' and trade.side == 'SELL') or 
-                                 (pos['side'] == 'SHORT' and trade.side == 'BUY'))):
-                                logger.info(f"🎯 FOLLOWER POSITION FOUND: {pos['symbol']} {pos['side']} {pos['size']} - can be closed by master {trade.side} order")
-                                has_follower_positions_to_close = True
-                                break
+                            if pos['symbol'] == trade.symbol and abs(float(pos['size'])) > 0.001:
+                                logger.info(f"📊 Follower {config.follower_account_id} has {trade.symbol} position: {pos['side']} {pos['size']}")
+                                follower_positions_details.append(f"Account {config.follower_account_id}: {pos['side']} {pos['size']}")
+                                
+                                # Check if master trade can close this follower position
+                                if ((pos['side'] == 'LONG' and trade.side == 'SELL') or 
+                                    (pos['side'] == 'SHORT' and trade.side == 'BUY')):
+                                    logger.info(f"🎯 MATCH FOUND: Master {trade.side} order can close follower {pos['side']} position")
+                                    has_follower_positions_to_close = True
+                                else:
+                                    logger.info(f"📊 NO MATCH: Master {trade.side} vs follower {pos['side']} (same direction - position building)")
+                            
                     except Exception as e:
                         logger.warning(f"⚠️ Could not check follower positions for account {config.follower_account_id}: {e}")
             
+            # Enhanced logging for delayed closing detection
+            if follower_positions_details:
+                logger.info(f"📊 FOLLOWER POSITION SUMMARY: {len(follower_positions_details)} {trade.symbol} positions found:")
+                for detail in follower_positions_details:
+                    logger.info(f"   - {detail}")
+            else:
+                logger.info(f"📊 NO FOLLOWER POSITIONS: No {trade.symbol} positions found in any follower account")
+            
             if has_follower_positions_to_close:
-                logger.info(f"🔄 FOLLOWER POSITIONS DETECTED: Master {trade.side} order can close existing follower positions")
+                logger.info(f"🎯 DELAYED CLOSING CONFIRMED: Master {trade.side} order will close existing follower positions")
+                logger.info(f"   This handles delayed position closing scenarios (5+ minutes after opening)")
                 return True
+            else:
+                logger.info(f"ℹ️ NO CLOSING NEEDED: No opposite follower positions found to close")
             
             # STEP 1: Check current positions from Binance API
             positions = []
@@ -1885,23 +1909,57 @@ class CopyTradingEngine:
                             logger.info(f"🔄 QUANTITY MATCH CLOSING: Trade {trade.quantity} ≈ recent opposite {total_recent_opposite} (diff: {qty_ratio:.2%})")
                             return True
             
-            # STEP 5: TIME-BASED FALLBACK - detect closing patterns even when logic fails
-            # This helps with the "5 minute delay" issue where positions are already closed
-            logger.info(f"🔍 Final fallback: Time-based pattern detection...")
+            # STEP 5: ENHANCED TIME-BASED FALLBACK for delayed closing (5-10 minutes)
+            # This specifically addresses the delayed position closing issue
+            logger.info(f"🔍 DELAYED CLOSING FALLBACK: Enhanced time-based pattern detection...")
             
             if recent_opposite_trades:
-                # If there was a recent opposite trade and this trade is smaller, it might be closing
+                # Get all opposite trades within the last 6 hours (more comprehensive)
                 most_recent_opposite = recent_opposite_trades[0]
                 time_diff = datetime.utcnow() - most_recent_opposite.created_at
                 
-                # If the opposite trade was within last 2 hours and current trade is opposite direction
-                if time_diff.total_seconds() < 7200:  # 2 hours
-                    logger.info(f"🔄 TIME-BASED CLOSING DETECTED: {trade.side} order {time_diff} after {opposite_side} trade")
-                    logger.info(f"   Recent {opposite_side}: {most_recent_opposite.quantity}, Current {trade.side}: {trade.quantity}")
+                logger.info(f"🕐 Time analysis: Most recent {opposite_side} trade was {time_diff} ago")
+                logger.info(f"📊 Trade comparison: {opposite_side} {most_recent_opposite.quantity} vs current {trade.side} {trade.quantity}")
+                
+                # EXTENDED TIME WINDOW for delayed closing detection (up to 6 hours)
+                if time_diff.total_seconds() < 21600:  # 6 hours (was 2 hours)
+                    logger.info(f"🔄 DELAYED CLOSING ANALYSIS: {trade.side} order {time_diff} after {opposite_side} trade")
                     
-                    # More lenient closing detection for time-based fallback
-                    if trade.quantity >= most_recent_opposite.quantity * 0.3:  # At least 30% of the opposite trade
-                        logger.info(f"🔄 FALLBACK POSITION CLOSING: {trade.quantity} >= 30% of recent opposite trade {most_recent_opposite.quantity}")
+                    # Check if this might be delayed closing in multiple scenarios:
+                    
+                    # Scenario 1: Exact or near-exact quantity match (high confidence)
+                    qty_diff_ratio = abs(trade.quantity - most_recent_opposite.quantity) / most_recent_opposite.quantity
+                    if qty_diff_ratio < 0.2:  # Within 20% (more lenient)
+                        logger.info(f"🎯 DELAYED CLOSING - QUANTITY MATCH: {trade.quantity} ≈ {most_recent_opposite.quantity} (diff: {qty_diff_ratio:.2%})")
+                        return True
+                    
+                    # Scenario 2: Partial closing (common in delayed scenarios)
+                    if trade.quantity >= most_recent_opposite.quantity * 0.25:  # At least 25% (more lenient)
+                        logger.info(f"🔄 DELAYED CLOSING - PARTIAL: {trade.quantity} >= 25% of recent opposite trade {most_recent_opposite.quantity}")
+                        
+                        # Additional check: If time gap is significant (5+ minutes), be more aggressive
+                        if time_diff.total_seconds() >= 300:  # 5 minutes or more
+                            logger.info(f"⏰ LONG DELAY DETECTED: {time_diff} gap suggests delayed position closing")
+                            return True
+                    
+                    # Scenario 3: Any reasonable quantity with significant time gap
+                    if (time_diff.total_seconds() >= 600 and  # 10+ minutes
+                        trade.quantity >= most_recent_opposite.quantity * 0.1):  # At least 10%
+                        logger.info(f"⏰ VERY LONG DELAY: {time_diff} gap with {trade.quantity} suggests delayed closing")
+                        return True
+                
+                # FALLBACK: Check for any opposite trades in the last 24 hours for very delayed closing
+                very_old_opposite = [t for t in recent_trades if t.side == opposite_side and 
+                                   (datetime.utcnow() - t.created_at).total_seconds() < 86400]  # 24 hours
+                
+                if very_old_opposite and not recent_opposite_trades:
+                    logger.info(f"🔍 VERY DELAYED SCENARIO: Found old {opposite_side} trades but no recent ones")
+                    # If there are old opposite trades but current trade is opposite direction,
+                    # this might be a very delayed closing
+                    oldest_opposite = very_old_opposite[0]
+                    very_long_gap = datetime.utcnow() - oldest_opposite.created_at
+                    if very_long_gap.total_seconds() >= 1800:  # 30+ minutes
+                        logger.info(f"⏰ VERY DELAYED CLOSING: {very_long_gap} after {opposite_side} trade")
                         return True
             
             logger.info(f"📈 FINAL DETERMINATION: Regular trade order (not position closing)")
