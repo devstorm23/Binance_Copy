@@ -884,42 +884,42 @@ class CopyTradingEngine:
             session.refresh(db_trade)
             logger.info(f"✅ Trade {db_trade.id} saved to database successfully")
             
-                         # Copy to followers for NEW orders and FILLED orders  
-             # Also handle case where we missed the NEW state and only see FILLED
-             if order_status in ['NEW', 'FILLED']:
-                 logger.info(f"🚀 PROCESSING {order_status} ORDER: About to copy {order_status.lower()} order to followers")
-                 
-                 # For FILLED orders, check if we already copied this as NEW to avoid duplicates
-                 if order_status == 'FILLED':
-                     existing_copy = session.query(Trade).filter(
-                         Trade.master_trade_id == db_trade.id,
-                         Trade.copied_from_master == True
-                     ).first()
-                     
-                     if existing_copy:
-                         logger.info(f"📝 FILLED order already copied when it was NEW, skipping duplicate")
-                         session.close()
-                         return
-                     else:
-                         logger.info(f"🎯 FILLED order was not copied as NEW - copying now (this handles fast-filling orders)")
-                 
-                 # ENHANCED: Check if this is a position closing order with multiple detection methods
-                 logger.info(f"🔍 STARTING POSITION ANALYSIS: Checking if {db_trade.symbol} {db_trade.side} {db_trade.quantity} is position closing...")
-                 is_reduce_only = order.get('reduceOnly', False)
-                 logger.info(f"🔍 REDUCE_ONLY CHECK: Order has reduceOnly={is_reduce_only}")
-                 
-                 is_position_closing = await self.is_position_closing_order(master_id, db_trade, session)
-                 logger.info(f"🔍 POSITION CLOSING ANALYSIS RESULT: is_position_closing={is_position_closing}")
-                 
-                 if is_reduce_only:
-                     logger.info(f"🔄 REDUCE_ONLY DETECTED: Closing follower positions due to reduceOnly flag")
-                     await self.close_follower_positions(db_trade, session)
-                 elif is_position_closing:
-                     logger.info(f"🔄 POSITION CLOSING DETECTED: Closing follower positions via analysis")
-                     await self.close_follower_positions(db_trade, session)
-                 else:
-                     logger.info(f"📈 REGULAR TRADE DETECTED: Copying to followers as new trade")
-                     await self.copy_trade_to_followers(db_trade, session)
+            # Copy to followers for NEW orders and FILLED orders  
+            # Also handle case where we missed the NEW state and only see FILLED
+            if order_status in ['NEW', 'FILLED']:
+                logger.info(f"🚀 PROCESSING {order_status} ORDER: About to copy {order_status.lower()} order to followers")
+                
+                # For FILLED orders, check if we already copied this as NEW to avoid duplicates
+                if order_status == 'FILLED':
+                    existing_copy = session.query(Trade).filter(
+                        Trade.master_trade_id == db_trade.id,
+                        Trade.copied_from_master == True
+                    ).first()
+                    
+                    if existing_copy:
+                        logger.info(f"📝 FILLED order already copied when it was NEW, skipping duplicate")
+                        session.close()
+                        return
+                    else:
+                        logger.info(f"🎯 FILLED order was not copied as NEW - copying now (this handles fast-filling orders)")
+                
+                # ENHANCED: Check if this is a position closing order with multiple detection methods
+                logger.info(f"🔍 STARTING POSITION ANALYSIS: Checking if {db_trade.symbol} {db_trade.side} {db_trade.quantity} is position closing...")
+                is_reduce_only = order.get('reduceOnly', False)
+                logger.info(f"🔍 REDUCE_ONLY CHECK: Order has reduceOnly={is_reduce_only}")
+                
+                is_position_closing = await self.is_position_closing_order(master_id, db_trade, session)
+                logger.info(f"🔍 POSITION CLOSING ANALYSIS RESULT: is_position_closing={is_position_closing}")
+                
+                if is_reduce_only:
+                    logger.info(f"🔄 REDUCE_ONLY DETECTED: Closing follower positions due to reduceOnly flag")
+                    await self.close_follower_positions(db_trade, session)
+                elif is_position_closing:
+                    logger.info(f"🔄 POSITION CLOSING DETECTED: Closing follower positions via analysis")
+                    await self.close_follower_positions(db_trade, session)
+                else:
+                    logger.info(f"📈 REGULAR TRADE DETECTED: Copying to followers as new trade")
+                    await self.copy_trade_to_followers(db_trade, session)
                     
             elif order_status == 'PARTIALLY_FILLED':
                 # For partially filled orders, check if we already copied this order
