@@ -786,10 +786,7 @@ class CopyTradingEngine:
                             logger.error(f"❌ Error closing database session: {cleanup_error}")
             
             logger.info(f"📋 Processing NEW master order: {order['symbol']} {order['side']} {original_qty} - Status: {order_status}")
-            
-            # Mark this order as processed (with cleanup to prevent memory leaks)
-            self.processed_orders[master_id].add(order_id)
-            logger.info(f"✔️ Marked order {order_id} as processed - now proceeding to database creation")
+            logger.info(f"🚀 PROCEEDING TO DATABASE CREATION: Order {order_id} will be processed now")
             
             # Clean up old processed orders to prevent memory leaks (keep only last 1000)
             if len(self.processed_orders[master_id]) > 1000:
@@ -959,7 +956,10 @@ class CopyTradingEngine:
             
             logger.info(f"🔒 Closing database session...")
             session.close()
-            logger.info(f"✅ Master order {order_id} processed completely")
+            
+            # Mark this order as processed ONLY after successful completion
+            self.processed_orders[master_id].add(order_id)
+            logger.info(f"✅ Master order {order_id} processed completely and marked as processed")
             
         except Exception as e:
             logger.error(f"❌ Error processing master order: {e}")
