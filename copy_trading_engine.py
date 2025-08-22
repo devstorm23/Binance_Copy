@@ -1721,9 +1721,6 @@ class CopyTradingEngine:
         try:
             logger.info(f"🔍 Analyzing if order is position closing: {trade.symbol} {trade.side} {trade.quantity}")
             
-            # CONSERVATIVE APPROACH: Default to treating orders as NEW TRADES unless we have strong evidence they're position closing
-            # This prevents false positives that would cause trades to not be copied to followers
-            
             # Get master account client to check positions
             master_client = self.master_clients.get(master_id)
             if not master_client:
@@ -1846,32 +1843,18 @@ class CopyTradingEngine:
                         logger.info(f"🔄 SIGNIFICANT POSITION REDUCTION: BUY {trade.quantity} reduces SHORT position {abs_net} by {trade.quantity/abs_net*100:.1f}%")
                         return True
                 
-                # ENHANCED HEURISTIC: Only consider it position closing if the order would FULLY or SIGNIFICANTLY close the position
-                # Avoid false positives where small trades are incorrectly classified as position closing
-                position_closing_threshold = 0.8  # Order must close at least 80% of the position to be considered closing
-                
+                # ENHANCED HEURISTIC: If net position is opposite to current trade direction, it's likely closing
                 if net_position > 0 and trade.side == 'SELL':
-                    if trade.quantity >= net_position * position_closing_threshold:
-                        logger.info(f"🔄 POSITION CLOSING: Net LONG position {net_position}, SELL order {trade.quantity} (closes {trade.quantity/net_position*100:.1f}%)")
-                        return True
-                    else:
-                        logger.info(f"📈 PARTIAL SELL: Net LONG position {net_position}, SELL order {trade.quantity} (only {trade.quantity/net_position*100:.1f}% - treating as new trade)")
-                        return False
-                elif net_position < 0 and trade.side == 'BUY':
-                    abs_net_position = abs(net_position)
-                    if trade.quantity >= abs_net_position * position_closing_threshold:
-                        logger.info(f"🔄 POSITION CLOSING: Net SHORT position {abs_net_position}, BUY order {trade.quantity} (closes {trade.quantity/abs_net_position*100:.1f}%)")
-                        return True
-                    else:
-                        logger.info(f"📈 PARTIAL BUY: Net SHORT position {abs_net_position}, BUY order {trade.quantity} (only {trade.quantity/abs_net_position*100:.1f}% - treating as new trade)")
-                        return False
-                
-                # Only use quantity heuristic if there's a significant imbalance AND the current trade would substantially reduce it
-                if total_opposite_qty > total_same_qty and trade.quantity >= (total_opposite_qty - total_same_qty) * 0.8:
-                    logger.info(f"🔄 Position closing heuristic: recent opposite trades {total_opposite_qty} > same side {total_same_qty}, current order {trade.quantity} closes most of the imbalance")
+                    logger.info(f"🔄 POSITION CLOSING: Net LONG position {net_position}, SELL order {trade.quantity}")
                     return True
-                elif total_opposite_qty > total_same_qty:
-                    logger.info(f"📈 Trade imbalance exists (opposite: {total_opposite_qty}, same: {total_same_qty}) but current order {trade.quantity} is too small to be position closing - treating as new trade")
+                elif net_position < 0 and trade.side == 'BUY':
+                    logger.info(f"🔄 POSITION CLOSING: Net SHORT position {abs(net_position)}, BUY order {trade.quantity}")
+                    return True
+                
+                # If we have more quantity in opposite direction, this trade is likely closing
+                if total_opposite_qty > total_same_qty:
+                    logger.info(f"🔄 Position closing heuristic: recent opposite trades {total_opposite_qty} > same side {total_same_qty}")
+                    return True
             
             # STEP 4: Enhanced quantity matching - only for legitimate closing scenarios
             # If we already determined this is same-direction (position building), skip quantity matching entirely
