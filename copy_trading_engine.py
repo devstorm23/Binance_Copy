@@ -448,12 +448,13 @@ class CopyTradingEngine:
                         status = order.get('status', 'UNKNOWN')
                         time_value = order.get('time', order.get('updateTime', 0))
                         
-                        # Priority order: NEW (0), PARTIALLY_FILLED (1), FILLED (2), others (3)
+                        # Priority order: NEW (0), FILLED (1), PARTIALLY_FILLED (2), others (3)
+                        # FILLED orders (market orders) get high priority for immediate copying
                         if status == 'NEW':
                             priority = 0  # Highest priority for NEW orders
-                        elif status == 'PARTIALLY_FILLED':
-                            priority = 1
                         elif status == 'FILLED':
+                            priority = 1  # High priority for FILLED orders (market orders)
+                        elif status == 'PARTIALLY_FILLED':
                             priority = 2
                         else:
                             priority = 3
@@ -461,7 +462,7 @@ class CopyTradingEngine:
                         return (priority, time_value)
                     
                     recent_orders.sort(key=order_priority)
-                    logger.info(f"📊 Sorted orders by priority (NEW orders first)")
+                    logger.info(f"📊 Sorted orders by priority (NEW first, then FILLED market orders)")
                     
                     # Count different order types for debugging
                     order_counts = {}
@@ -478,6 +479,8 @@ class CopyTradingEngine:
                             
                             if order_status in ['NEW', 'PARTIALLY_FILLED']:
                                 logger.info(f"🚀 DETECTED NEW ORDER: {order['orderId']} ({order_status}) from {order_time} for master {master_id}")
+                            elif order_status == 'FILLED':
+                                logger.info(f"🏁 DETECTED FILLED ORDER: {order['orderId']} (FILLED) from {order_time} for master {master_id} - MARKET ORDER")
                             
                             logger.info(f"📝 About to process order {order['orderId']} (Status: {order_status}) for master {master_id}")
                             await self.process_master_order(master_id, order)
@@ -591,12 +594,13 @@ class CopyTradingEngine:
                 
                 # STRICT FILTERING: Only process orders that are:
                 # 1. Open orders (NEW/PARTIALLY_FILLED) - regardless of time
-                # 2. Very recent filled orders (within last 5 minutes)
+                # 2. Recent filled orders (within last 10 minutes) - market orders are processed immediately
                 # 3. Very recent cancelled orders (within last 5 minutes) - but NEVER from before server startup
                 is_open_order = order_status in ['NEW', 'PARTIALLY_FILLED']
                 five_minutes_ago = int((datetime.utcnow() - timedelta(minutes=5)).timestamp() * 1000)
+                ten_minutes_ago = int((datetime.utcnow() - timedelta(minutes=10)).timestamp() * 1000)
                 server_start_time_ms = int(self.server_start_time.timestamp() * 1000)
-                is_recently_filled = order_status == 'FILLED' and order_time >= five_minutes_ago
+                is_recently_filled = order_status == 'FILLED' and order_time >= ten_minutes_ago
                 # For cancelled orders, they must be both recent AND after server startup
                 is_recently_cancelled = (order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED'] and 
                                        order_time >= five_minutes_ago and 
@@ -625,7 +629,7 @@ class CopyTradingEngine:
                     elif is_recently_cancelled:
                         status_note = "❌ RECENTLY CANCELLED"
                     elif is_recently_filled:
-                        status_note = "🏁 RECENTLY FILLED"
+                        status_note = "🏁 FILLED (MARKET ORDER)"
                     else:
                         status_note = "🏁 RECENT"
                     # Fix timestamp display for logging
@@ -717,13 +721,15 @@ class CopyTradingEngine:
                 else:
                     logger.info(f"🚀 NEW ORDER DETECTED: Processing {order_id} from {order_time} - PRIORITY")
             
-            # For FILLED orders, allow up to 5 minutes
+            # For FILLED orders (market orders), allow up to 10 minutes for better detection
             elif order_status == 'FILLED':
-                if order_time < five_minutes_ago:
-                    logger.info(f"🛡️ OLD FILLED ORDER FILTER: Skipping old FILLED order {order_id} from {order_time} (older than 5 minutes)")
+                ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+                if order_time < ten_minutes_ago:
+                    logger.info(f"🛡️ OLD FILLED ORDER FILTER: Skipping old FILLED order {order_id} from {order_time} (older than 10 minutes)")
                     return
                 else:
-                    logger.info(f"✅ FILLED ORDER: Processing {order_id} from {order_time}")
+                    logger.info(f"✅ FILLED ORDER (MARKET): Processing {order_id} from {order_time} - HIGH PRIORITY")
+                    logger.info(f"🚀 MARKET ORDER DETAILS: {order['symbol']} {order['side']} {executed_qty} @ avg_price={order.get('avgPrice', 'N/A')}")
             
             # For all other orders, only process if within 5 minutes
             elif order_time < five_minutes_ago:
