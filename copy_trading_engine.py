@@ -409,12 +409,12 @@ class CopyTradingEngine:
         """Check for new trades in master account using Binance API"""
         try:
             # Get the last trade timestamp for this master
-            # STARTUP PROTECTION: On startup, only look back 2 minutes maximum
+            # STARTUP PROTECTION: On startup, only look back 5 minutes maximum to catch more NEW orders
             if master_id not in self.startup_complete:
-                # On startup, only look back 2 minutes or server start time, whichever is later
-                two_minutes_ago = datetime.utcnow() - timedelta(minutes=2)
-                default_check_time = max(two_minutes_ago, self.server_start_time)
-                logger.info(f"🚀 STARTUP MODE: Only looking back to {default_check_time} (max 2 minutes)")
+                # On startup, only look back 5 minutes or server start time, whichever is later
+                five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+                default_check_time = max(five_minutes_ago, self.server_start_time)
+                logger.info(f"🚀 STARTUP MODE: Only looking back to {default_check_time} (max 5 minutes)")
             else:
                 # Normal operation - never go back further than server startup time
                 default_check_time = max(datetime.utcnow() - timedelta(hours=1), self.server_start_time)
@@ -449,12 +449,14 @@ class CopyTradingEngine:
                         time_value = order.get('time', order.get('updateTime', 0))
                         
                         # Priority order: NEW (0), PARTIALLY_FILLED (1), FILLED (2), others (3)
-                        if status in ['NEW', 'PARTIALLY_FILLED']:
-                            priority = 0
-                        elif status == 'FILLED':
+                        if status == 'NEW':
+                            priority = 0  # Highest priority for NEW orders
+                        elif status == 'PARTIALLY_FILLED':
                             priority = 1
-                        else:
+                        elif status == 'FILLED':
                             priority = 2
+                        else:
+                            priority = 3
                         
                         return (priority, time_value)
                     
@@ -472,7 +474,7 @@ class CopyTradingEngine:
                     for order in recent_orders:
                         try:
                             order_status = order.get('status', 'UNKNOWN')
-                            order_time = datetime.fromtimestamp(order.get('time', order.get('updateTime', 0)) / 1000)
+                            order_time = datetime.utcfromtimestamp(order.get('time', order.get('updateTime', 0)) / 1000)
                             
                             if order_status in ['NEW', 'PARTIALLY_FILLED']:
                                 logger.info(f"🚀 DETECTED NEW ORDER: {order['orderId']} ({order_status}) from {order_time} for master {master_id}")
@@ -522,6 +524,7 @@ class CopyTradingEngine:
                 open_orders = await client.get_open_orders()
                 if open_orders:
                     logger.info(f"📋 Retrieved {len(open_orders)} open orders")
+                    new_order_count = 0
                     for order in open_orders:
                         # Fix timestamp display in logs
                         order_time = int(order['time'])
@@ -529,8 +532,18 @@ class CopyTradingEngine:
                         if order_time > current_time_ms + 86400000:  # More than 1 day in future
                             timestamp_display = "INVALID_FUTURE_TIME"
                         else:
-                            timestamp_display = datetime.fromtimestamp(order_time / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                        logger.info(f"📋 Open order details: ID={order['orderId']}, Symbol={order['symbol']}, Side={order['side']}, Status={order['status']}, Time={timestamp_display}")
+                            timestamp_display = datetime.utcfromtimestamp(order_time / 1000).strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        # Count NEW orders specifically
+                        if order.get('status') == 'NEW':
+                            new_order_count += 1
+                            logger.info(f"🆕 NEW OPEN ORDER: ID={order['orderId']}, Symbol={order['symbol']}, Side={order['side']}, Status={order['status']}, Time={timestamp_display}")
+                        else:
+                            logger.info(f"📋 Open order details: ID={order['orderId']}, Symbol={order['symbol']}, Side={order['side']}, Status={order['status']}, Time={timestamp_display}")
+                    
+                    if new_order_count > 0:
+                        logger.info(f"🚨 PRIORITY: Found {new_order_count} NEW orders that need immediate copying!")
+                    
                     all_orders.extend(open_orders)
                 else:
                     logger.debug("📋 No open orders found")
@@ -550,11 +563,11 @@ class CopyTradingEngine:
                     None, 
                     lambda: client.client.futures_get_all_orders(startTime=effective_start_time, limit=50)
                 )
-                logger.info(f"📊 Retrieved {len(historical_orders)} historical orders from Binance (since {datetime.fromtimestamp(effective_start_time / 1000)})")
+                logger.info(f"📊 Retrieved {len(historical_orders)} historical orders from Binance (since {datetime.utcfromtimestamp(effective_start_time / 1000)})")
                 
                 # Debug log to show startup protection is working
                 if effective_start_time > start_time:
-                    logger.info(f"🛡️ Startup protection active: Limited from {datetime.fromtimestamp(start_time / 1000)} to {datetime.fromtimestamp(effective_start_time / 1000)}")
+                    logger.info(f"🛡️ Startup protection active: Limited from {datetime.utcfromtimestamp(start_time / 1000)} to {datetime.utcfromtimestamp(effective_start_time / 1000)}")
                 
                 all_orders.extend(historical_orders)
             except Exception as e:
@@ -591,8 +604,8 @@ class CopyTradingEngine:
                 
                 # Debug logging for cancelled orders that are being filtered out
                 if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']:
-                    order_time_readable = datetime.fromtimestamp(order_time / 1000)
-                    server_start_readable = datetime.fromtimestamp(server_start_time_ms / 1000)
+                    order_time_readable = datetime.utcfromtimestamp(order_time / 1000)
+                    server_start_readable = datetime.utcfromtimestamp(server_start_time_ms / 1000)
                     if order_time < server_start_time_ms:
                         logger.info(f"🛡️ FILTERED: Cancelled order {order_id} from {order_time_readable} (before server start {server_start_readable})")
                     elif not is_recently_cancelled:
@@ -605,7 +618,10 @@ class CopyTradingEngine:
                     seen_orders.add(order_id)
                     relevant_orders.append(order)
                     if is_open_order:
-                        status_note = "📋 OPEN"
+                        if order_status == 'NEW':
+                            status_note = "🆕 NEW ORDER (PRIORITY)"
+                        else:
+                            status_note = "📋 PARTIALLY FILLED"
                     elif is_recently_cancelled:
                         status_note = "❌ RECENTLY CANCELLED"
                     elif is_recently_filled:
@@ -613,7 +629,7 @@ class CopyTradingEngine:
                     else:
                         status_note = "🏁 RECENT"
                     # Fix timestamp display for logging
-                    timestamp_display = datetime.fromtimestamp(order_time / 1000).strftime('%Y-%m-%d %H:%M:%S')
+                    timestamp_display = datetime.utcfromtimestamp(order_time / 1000).strftime('%Y-%m-%d %H:%M:%S')
                     logger.info(f"🎯 Found order {status_note}: {order['symbol']} {order['side']} {order['origQty']} - Status: {order_status} - Time: {timestamp_display}")
                 else:
                     # Log why orders are being filtered out (only for debug level)
@@ -622,8 +638,8 @@ class CopyTradingEngine:
                     elif order['side'] not in ['BUY', 'SELL']:
                         logger.debug(f"⏭️ Skipping non-trading order: {order_id} (side: {order['side']})")
                     elif not (is_open_order or is_recently_filled or is_recently_cancelled):
-                        timestamp_display = datetime.fromtimestamp(order_time / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                        five_min_display = datetime.fromtimestamp(five_minutes_ago / 1000).strftime('%Y-%m-%d %H:%M:%S')
+                        timestamp_display = datetime.utcfromtimestamp(order_time / 1000).strftime('%Y-%m-%d %H:%M:%S')
+                        five_min_display = datetime.utcfromtimestamp(five_minutes_ago / 1000).strftime('%Y-%m-%d %H:%M:%S')
                         logger.debug(f"⏭️ Skipping old order: {order_id} (time: {timestamp_display}, threshold: {five_min_display})")
             
             logger.info(f"✅ Found {len(relevant_orders)} relevant orders (open + recent)")
@@ -660,7 +676,7 @@ class CopyTradingEngine:
             order_status = order['status']
             executed_qty = float(order.get('executedQty', 0))
             original_qty = float(order['origQty'])
-            order_time = datetime.fromtimestamp(order.get('time', order.get('updateTime', 0)) / 1000)
+            order_time = datetime.utcfromtimestamp(order.get('time', order.get('updateTime', 0)) / 1000)
             
             logger.info(f"🎯 Starting to process master order: {order['symbol']} {order['side']} {original_qty} - Status: {order_status} - Time: {order_time}")
             logger.info(f"🔍 Order details: ID={order_id}, ExecutedQty={executed_qty}, Type={order.get('type', 'UNKNOWN')}")
@@ -2054,7 +2070,7 @@ class CopyTradingEngine:
         try:
             order_symbol = order.get('symbol')
             order_side = order.get('side')
-            order_time = datetime.fromtimestamp(order.get('time', order.get('updateTime', 0)) / 1000)
+            order_time = datetime.utcfromtimestamp(order.get('time', order.get('updateTime', 0)) / 1000)
             order_quantity = float(order.get('origQty', 0))
             
             logger.info(f"🔍 Searching for follower trades to cancel: {order_symbol} {order_side} {order_quantity}")
@@ -2144,7 +2160,7 @@ class CopyTradingEngine:
             
             order_symbol = master_order.get('symbol')
             order_side = master_order.get('side')
-            order_time = datetime.fromtimestamp(master_order.get('time', master_order.get('updateTime', 0)) / 1000)
+            order_time = datetime.utcfromtimestamp(master_order.get('time', master_order.get('updateTime', 0)) / 1000)
             
             # Get copy trading configs for this master to find follower accounts
             configs = session.query(CopyTradingConfig).filter(

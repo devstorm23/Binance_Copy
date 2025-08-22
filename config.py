@@ -47,7 +47,7 @@ class Config:
     
     # Monitoring
     HEALTH_CHECK_INTERVAL = int(os.getenv("HEALTH_CHECK_INTERVAL", "30"))
-    TRADE_SYNC_DELAY = float(os.getenv("TRADE_SYNC_DELAY", "1.0"))
+    TRADE_SYNC_DELAY = float(os.getenv("TRADE_SYNC_DELAY", "0.5"))
     
     # Supported symbols (futures)
     SUPPORTED_SYMBOLS = [
