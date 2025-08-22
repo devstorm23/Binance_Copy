@@ -1227,8 +1227,8 @@ class CopyTradingEngine:
     async def calculate_balance_proportional_quantity(self, follower_balance: float, mark_price: float, master_trade: Trade, config: CopyTradingConfig) -> float:
         """Calculate position size proportional to account balance"""
         try:
-            # Use a conservative approach: risk 2% of balance per trade
-            conservative_risk_percentage = 2.0
+            # Use a conservative margin ratio: risk 1.9% of balance per trade
+            conservative_risk_percentage = 1.9
             risk_amount = follower_balance * (conservative_risk_percentage / 100.0)
             
             # Calculate quantity based on risk amount
