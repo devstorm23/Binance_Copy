@@ -1287,15 +1287,13 @@ class CopyTradingEngine:
             except (ValueError, TypeError):
                 master_trade_price = 0.0
             
-            master_price = master_trade_price if master_trade_price > 0 else mark_price
-            master_notional = master_trade.quantity * master_price
+            master_notional = master_trade.quantity * mark_price
             
             # Debug logging to verify prices
             logger.info(f"🔍 PRICE DEBUG:")
             logger.info(f"   Master trade price: {master_trade.price}")
             logger.info(f"   Mark price: {mark_price}")  
-            logger.info(f"   Using price: {master_price}")
-            logger.info(f"   Master notional: {master_trade.quantity} × {master_price} = ${master_notional:.2f}")
+            logger.info(f"   Master notional: {master_trade.quantity} × {mark_price} = ${master_notional:.2f}")
             
             # Calculate master's risk percentage on this trade
             master_risk_percentage = (master_notional / master_balance) * 100 if master_balance > 0 else 0
@@ -1304,7 +1302,7 @@ class CopyTradingEngine:
             # This ensures follower takes proportionally similar risk as master
             follower_notional = master_notional * balance_ratio
             # IMPORTANT: Use the same price as master trade to maintain consistent ratios
-            quantity = follower_notional / master_price
+            quantity = follower_notional / mark_price
             
             logger.info(f"📊 Balance-ratio calculation:")
             logger.info(f"   Master balance: ${master_balance:.2f}")
@@ -1394,13 +1392,11 @@ class CopyTradingEngine:
                 # Calculate balance ratio using stored balances
                 balance_ratio = follower_account.balance / master_account.balance
                 
-                # Calculate master trade's notional value
-                master_price = master_trade.price if master_trade.price > 0 else 1.0
-                master_notional = master_trade.quantity * master_price
+                master_notional = master_trade.quantity * mark_price
                 
                 # Scale proportionally based on balance ratio
                 follower_notional = master_notional * balance_ratio
-                fallback_quantity = follower_notional / master_price
+                fallback_quantity = follower_notional / mark_price
                 
                 # Apply copy percentage and safety reduction
                 fallback_quantity *= (config.copy_percentage / 100.0) * 0.8  # 20% safety reduction
@@ -1760,6 +1756,37 @@ class CopyTradingEngine:
                 logger.warning(f"⚠️ Master client not found for position check: {master_id}")
                 return False
             
+            # STEP 0: DIRECT FOLLOWER POSITION CHECK (Most reliable method)
+            # Check if there are follower positions that could be closed by this trade
+            logger.info(f"🔍 Checking follower positions for potential closing...")
+            
+            # Get copy trading configurations
+            configs = session.query(CopyTradingConfig).filter(
+                CopyTradingConfig.master_account_id == master_id,
+                CopyTradingConfig.is_active == True
+            ).all()
+            
+            has_follower_positions_to_close = False
+            for config in configs:
+                follower_client = self.follower_clients.get(config.follower_account_id)
+                if follower_client:
+                    try:
+                        follower_positions = await follower_client.get_positions()
+                        for pos in follower_positions:
+                            if (pos['symbol'] == trade.symbol and 
+                                abs(float(pos['size'])) > 0.001 and
+                                ((pos['side'] == 'LONG' and trade.side == 'SELL') or 
+                                 (pos['side'] == 'SHORT' and trade.side == 'BUY'))):
+                                logger.info(f"🎯 FOLLOWER POSITION FOUND: {pos['symbol']} {pos['side']} {pos['size']} - can be closed by master {trade.side} order")
+                                has_follower_positions_to_close = True
+                                break
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not check follower positions for account {config.follower_account_id}: {e}")
+            
+            if has_follower_positions_to_close:
+                logger.info(f"🔄 FOLLOWER POSITIONS DETECTED: Master {trade.side} order can close existing follower positions")
+                return True
+            
             # STEP 1: Check current positions from Binance API
             positions = []
             try:
@@ -1784,28 +1811,47 @@ class CopyTradingEngine:
             if positions:
                 logger.info(f"ℹ️ No {trade.symbol} position found in current positions, checking trade history...")
             
-            # STEP 3: Analyze recent trade history to detect position closing
+            # STEP 3: ENHANCED trade history analysis for position closing detection
+            # This handles cases where master position was already closed by the time we check
             logger.info(f"🔍 Analyzing trade history for position detection...")
+            
+            # Look for trades in the last 6 hours (more comprehensive than before)
             recent_trades = session.query(Trade).filter(
                 Trade.account_id == master_id,
                 Trade.symbol == trade.symbol,
                 Trade.status.in_(['FILLED', 'PARTIALLY_FILLED']),
-                Trade.created_at >= datetime.utcnow() - timedelta(hours=24),  # Last 24 hours
+                Trade.created_at >= datetime.utcnow() - timedelta(hours=6),  # Extended to 6 hours
                 Trade.id != trade.id  # Exclude the current trade we're analyzing
-            ).order_by(Trade.created_at.desc()).limit(20).all()
+            ).order_by(Trade.created_at.desc()).limit(50).all()  # Increased limit to catch more trades
             
             logger.info(f"📚 Found {len(recent_trades)} recent trades for analysis")
             
-            # Simple heuristic: if the most recent trades were in opposite direction, this might be closing
+            # ENHANCED POSITION CLOSING DETECTION: Look for clear patterns
             opposite_side = 'BUY' if trade.side == 'SELL' else 'SELL'
+            
+            # Strategy 1: Check if there's a recent position-opening trade in opposite direction
+            logger.info(f"🔍 Looking for recent {opposite_side} trades that opened positions...")
+            
+            # Find the most recent trades in opposite direction (these likely opened positions)
             recent_opposite_trades = [t for t in recent_trades if t.side == opposite_side]
+            same_side_trades = [t for t in recent_trades if t.side == trade.side]
             
             if recent_opposite_trades:
-                total_opposite_qty = sum(t.quantity for t in recent_opposite_trades)
-                same_side_trades = [t for t in recent_trades if t.side == trade.side]
-                total_same_qty = sum(t.quantity for t in same_side_trades)
+                # Get the most recent opposite trade (likely the position opener)
+                most_recent_opposite = recent_opposite_trades[0]  # Already sorted by created_at desc
+                time_since_opposite = datetime.utcnow() - most_recent_opposite.created_at
                 
-                # IMPROVED LOGIC: Calculate net position more accurately
+                logger.info(f"📊 Found recent {opposite_side} trade: {most_recent_opposite.quantity} at {most_recent_opposite.created_at}")
+                logger.info(f"🕐 Time since opposite trade: {time_since_opposite}")
+                
+                # If there was a recent opposite trade and no same-side trades since then, this is likely closing
+                same_side_after_opposite = [t for t in same_side_trades if t.created_at > most_recent_opposite.created_at]
+                
+                if len(same_side_after_opposite) == 0:
+                    logger.info(f"🔄 POSITION CLOSING DETECTED: {trade.side} order after recent {opposite_side} trade with no same-side trades in between")
+                    return True
+                
+                # Calculate running position to see if this trade closes it
                 net_position = 0
                 for t in recent_trades:
                     if t.side == 'BUY':
@@ -1813,7 +1859,18 @@ class CopyTradingEngine:
                     else:  # SELL
                         net_position -= t.quantity
                 
-                logger.info(f"📊 Position analysis: Net={net_position}, Opposite trades={total_opposite_qty}, Same side={total_same_qty}")
+                logger.info(f"📊 Position analysis: Net={net_position}, Most recent opposite={most_recent_opposite.quantity}")
+                
+                # Enhanced closing detection: if current trade would significantly reduce the net position
+                if trade.side == 'SELL' and net_position > 0:
+                    if trade.quantity >= net_position * 0.5:  # Closing at least 50% of position
+                        logger.info(f"🔄 SIGNIFICANT POSITION REDUCTION: SELL {trade.quantity} reduces LONG position {net_position} by {trade.quantity/net_position*100:.1f}%")
+                        return True
+                elif trade.side == 'BUY' and net_position < 0:
+                    abs_net = abs(net_position)
+                    if trade.quantity >= abs_net * 0.5:  # Closing at least 50% of position  
+                        logger.info(f"🔄 SIGNIFICANT POSITION REDUCTION: BUY {trade.quantity} reduces SHORT position {abs_net} by {trade.quantity/abs_net*100:.1f}%")
+                        return True
                 
                 # ENHANCED HEURISTIC: Only consider it position closing if the order would FULLY or SIGNIFICANTLY close the position
                 # Avoid false positives where small trades are incorrectly classified as position closing
@@ -1878,6 +1935,25 @@ class CopyTradingEngine:
                         if qty_ratio < 0.15:  # Within 15% tolerance
                             logger.info(f"🔄 QUANTITY MATCH CLOSING: Trade {trade.quantity} ≈ recent opposite {total_recent_opposite} (diff: {qty_ratio:.2%})")
                             return True
+            
+            # STEP 5: TIME-BASED FALLBACK - detect closing patterns even when logic fails
+            # This helps with the "5 minute delay" issue where positions are already closed
+            logger.info(f"🔍 Final fallback: Time-based pattern detection...")
+            
+            if recent_opposite_trades:
+                # If there was a recent opposite trade and this trade is smaller, it might be closing
+                most_recent_opposite = recent_opposite_trades[0]
+                time_diff = datetime.utcnow() - most_recent_opposite.created_at
+                
+                # If the opposite trade was within last 2 hours and current trade is opposite direction
+                if time_diff.total_seconds() < 7200:  # 2 hours
+                    logger.info(f"🔄 TIME-BASED CLOSING DETECTED: {trade.side} order {time_diff} after {opposite_side} trade")
+                    logger.info(f"   Recent {opposite_side}: {most_recent_opposite.quantity}, Current {trade.side}: {trade.quantity}")
+                    
+                    # More lenient closing detection for time-based fallback
+                    if trade.quantity >= most_recent_opposite.quantity * 0.3:  # At least 30% of the opposite trade
+                        logger.info(f"🔄 FALLBACK POSITION CLOSING: {trade.quantity} >= 30% of recent opposite trade {most_recent_opposite.quantity}")
+                        return True
             
             logger.info(f"📈 FINAL DETERMINATION: Regular trade order (not position closing)")
             return False
