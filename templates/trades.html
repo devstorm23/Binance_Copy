@@ -1,0 +1,516 @@
+{% extends "base.html" %}
+
+{% block title %}Trades - Copy Trading Bot{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Trade Statistics -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-chart-bar me-2"></i>
+                    Trade Statistics
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value" id="total-trades">-</div>
+                            <div class="metric-label">Total Trades</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value" id="successful-trades">-</div>
+                            <div class="metric-label">Successful</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value" id="pending-trades">-</div>
+                            <div class="metric-label">Pending</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value" id="failed-trades">-</div>
+                            <div class="metric-label">Failed</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value" id="total-volume">-</div>
+                            <div class="metric-label">Total Volume</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value" id="total-pnl">-</div>
+                            <div class="metric-label">Total P&L</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trade Filters -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-filter me-2"></i>
+                    Filters
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-2">
+                        <label for="filter-account" class="form-label">Account</label>
+                        <select class="form-select" id="filter-account">
+                            <option value="">All Accounts</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filter-symbol" class="form-label">Symbol</label>
+                        <select class="form-select" id="filter-symbol">
+                            <option value="">All Symbols</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filter-side" class="form-label">Side</label>
+                        <select class="form-select" id="filter-side">
+                            <option value="">All Sides</option>
+                            <option value="BUY">Buy</option>
+                            <option value="SELL">Sell</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filter-status" class="form-label">Status</label>
+                        <select class="form-select" id="filter-status">
+                            <option value="">All Status</option>
+                            <option value="PENDING">Pending</option>
+                            <option value="FILLED">Filled</option>
+                            <option value="CANCELLED">Cancelled</option>
+                            <option value="REJECTED">Rejected</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filter-type" class="form-label">Type</label>
+                        <select class="form-select" id="filter-type">
+                            <option value="">All Types</option>
+                            <option value="MARKET">Market</option>
+                            <option value="LIMIT">Limit</option>
+                            <option value="STOP_MARKET">Stop Market</option>
+                            <option value="TAKE_PROFIT_MARKET">Take Profit</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">&nbsp;</label>
+                        <button type="button" class="btn btn-primary w-100" onclick="applyFilters()">
+                            <i class="fas fa-search me-2"></i>
+                            Apply Filters
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trades Table -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-exchange-alt me-2"></i>
+                    All Trades
+                </h5>
+                <div>
+                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="refreshTrades()">
+                        <i class="fas fa-sync-alt me-2"></i>
+                        Refresh
+                    </button>
+                    <button type="button" class="btn btn-outline-success btn-sm" onclick="exportTrades()">
+                        <i class="fas fa-download me-2"></i>
+                        Export
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Account</th>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Type</th>
+                                <th>Quantity</th>
+                                <th>Price</th>
+                                <th>Status</th>
+                                <th>Copied</th>
+                                <th>Time</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trades-table">
+                            <tr>
+                                <td colspan="11" class="text-center">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Pagination -->
+                <nav aria-label="Trades pagination">
+                    <ul class="pagination justify-content-center" id="trades-pagination">
+                        <li class="page-item disabled">
+                            <a class="page-link" href="#" tabindex="-1">Previous</a>
+                        </li>
+                        <li class="page-item active">
+                            <a class="page-link" href="#">1</a>
+                        </li>
+                        <li class="page-item disabled">
+                            <a class="page-link" href="#">Next</a>
+                        </li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Trade Details Modal -->
+<div class="modal fade" id="tradeModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Trade Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Trade Information</h6>
+                        <table class="table table-sm">
+                            <tr>
+                                <td>Trade ID:</td>
+                                <td id="modal-trade-id">-</td>
+                            </tr>
+                            <tr>
+                                <td>Account:</td>
+                                <td id="modal-trade-account">-</td>
+                            </tr>
+                            <tr>
+                                <td>Symbol:</td>
+                                <td id="modal-trade-symbol">-</td>
+                            </tr>
+                            <tr>
+                                <td>Side:</td>
+                                <td id="modal-trade-side">-</td>
+                            </tr>
+                            <tr>
+                                <td>Type:</td>
+                                <td id="modal-trade-type">-</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Order Details</h6>
+                        <table class="table table-sm">
+                            <tr>
+                                <td>Quantity:</td>
+                                <td id="modal-trade-quantity">-</td>
+                            </tr>
+                            <tr>
+                                <td>Price:</td>
+                                <td id="modal-trade-price">-</td>
+                            </tr>
+                            <tr>
+                                <td>Stop Price:</td>
+                                <td id="modal-trade-stop-price">-</td>
+                            </tr>
+                            <tr>
+                                <td>Take Profit:</td>
+                                <td id="modal-trade-take-profit">-</td>
+                            </tr>
+                            <tr>
+                                <td>Status:</td>
+                                <td id="modal-trade-status">-</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+                
+                <div class="mt-3">
+                    <h6>Copy Trading Information</h6>
+                    <table class="table table-sm">
+                        <tr>
+                            <td>Copied from Master:</td>
+                            <td id="modal-trade-copied">-</td>
+                        </tr>
+                            <td>Master Trade ID:</td>
+                            <td id="modal-trade-master-id">-</td>
+                        </tr>
+                        <tr>
+                            <td>Binance Order ID:</td>
+                            <td id="modal-trade-binance-id">-</td>
+                        </tr>
+                        <tr>
+                            <td>Created:</td>
+                            <td id="modal-trade-created">-</td>
+                        </tr>
+                        <tr>
+                            <td>Updated:</td>
+                            <td id="modal-trade-updated">-</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-warning" onclick="cancelTrade()">
+                    <i class="fas fa-times me-2"></i>
+                    Cancel Trade
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentTradeId = null;
+    let allTrades = [];
+    let filteredTrades = [];
+    let currentPage = 1;
+    const tradesPerPage = 20;
+    const tradeModal = new bootstrap.Modal(document.getElementById('tradeModal'));
+
+    // Request initial data
+    socket.emit('request_trades');
+    socket.emit('request_accounts');
+
+    // Handle trades updates
+    socket.on('trades_update', function(data) {
+        allTrades = data;
+        filteredTrades = [...allTrades];
+        updateTradesTable();
+        updateTradeStatistics();
+        updateFilters();
+    });
+
+    function updateTradesTable() {
+        const tbody = document.getElementById('trades-table');
+        const startIndex = (currentPage - 1) * tradesPerPage;
+        const endIndex = startIndex + tradesPerPage;
+        const pageTrades = filteredTrades.slice(startIndex, endIndex);
+
+        if (pageTrades.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="11" class="text-center">No trades found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = pageTrades.map(trade => `
+            <tr>
+                <td>${trade.id}</td>
+                <td>${getAccountName(trade.account_id)}</td>
+                <td>${trade.symbol}</td>
+                <td>
+                    <span class="badge ${trade.side === 'BUY' ? 'bg-success' : 'bg-danger'}">
+                        ${trade.side}
+                    </span>
+                </td>
+                <td>${trade.order_type}</td>
+                <td>${trade.quantity}</td>
+                <td>${trade.price ? trade.price.toFixed(2) : '-'}</td>
+                <td>
+                    <span class="badge ${getStatusBadgeClass(trade.status)}">
+                        ${trade.status}
+                    </span>
+                </td>
+                <td>
+                    <span class="badge ${trade.copied_from_master ? 'bg-info' : 'bg-secondary'}">
+                        ${trade.copied_from_master ? 'Yes' : 'No'}
+                    </span>
+                </td>
+                <td>${new Date(trade.created_at).toLocaleString()}</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-info me-1" onclick="viewTrade(${trade.id})">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                    ${trade.status === 'PENDING' ? `
+                        <button class="btn btn-sm btn-outline-warning" onclick="cancelTrade(${trade.id})">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    ` : ''}
+                </td>
+            </tr>
+        `).join('');
+
+        updatePagination();
+    }
+
+    function updateTradeStatistics() {
+        const totalTrades = allTrades.length;
+        const successfulTrades = allTrades.filter(t => t.status === 'FILLED').length;
+        const pendingTrades = allTrades.filter(t => t.status === 'PENDING').length;
+        const failedTrades = allTrades.filter(t => t.status === 'REJECTED' || t.status === 'CANCELLED').length;
+        const totalVolume = allTrades.reduce((sum, t) => sum + (t.quantity * (t.price || 0)), 0);
+
+        document.getElementById('total-trades').textContent = totalTrades;
+        document.getElementById('successful-trades').textContent = successfulTrades;
+        document.getElementById('pending-trades').textContent = pendingTrades;
+        document.getElementById('failed-trades').textContent = failedTrades;
+        document.getElementById('total-volume').textContent = `$${totalVolume.toFixed(2)}`;
+        document.getElementById('total-pnl').textContent = '$0.00'; // Would calculate from positions
+    }
+
+    function updateFilters() {
+        const accountSelect = document.getElementById('filter-account');
+        const symbolSelect = document.getElementById('filter-symbol');
+        
+        // Get unique accounts and symbols
+        const accounts = [...new Set(allTrades.map(t => t.account_id))];
+        const symbols = [...new Set(allTrades.map(t => t.symbol))];
+        
+        // Update account filter
+        accountSelect.innerHTML = '<option value="">All Accounts</option>';
+        accounts.forEach(accountId => {
+            const option = document.createElement('option');
+            option.value = accountId;
+            option.textContent = getAccountName(accountId);
+            accountSelect.appendChild(option);
+        });
+        
+        // Update symbol filter
+        symbolSelect.innerHTML = '<option value="">All Symbols</option>';
+        symbols.forEach(symbol => {
+            const option = document.createElement('option');
+            option.value = symbol;
+            option.textContent = symbol;
+            symbolSelect.appendChild(option);
+        });
+    }
+
+    function applyFilters() {
+        const accountFilter = document.getElementById('filter-account').value;
+        const symbolFilter = document.getElementById('filter-symbol').value;
+        const sideFilter = document.getElementById('filter-side').value;
+        const statusFilter = document.getElementById('filter-status').value;
+        const typeFilter = document.getElementById('filter-type').value;
+
+        filteredTrades = allTrades.filter(trade => {
+            if (accountFilter && trade.account_id != accountFilter) return false;
+            if (symbolFilter && trade.symbol !== symbolFilter) return false;
+            if (sideFilter && trade.side !== sideFilter) return false;
+            if (statusFilter && trade.status !== statusFilter) return false;
+            if (typeFilter && trade.order_type !== typeFilter) return false;
+            return true;
+        });
+
+        currentPage = 1;
+        updateTradesTable();
+    }
+
+    function updatePagination() {
+        const totalPages = Math.ceil(filteredTrades.length / tradesPerPage);
+        const pagination = document.getElementById('trades-pagination');
+        
+        let paginationHTML = `
+            <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="changePage(${currentPage - 1})">Previous</a>
+            </li>
+        `;
+        
+        for (let i = 1; i <= totalPages; i++) {
+            paginationHTML += `
+                <li class="page-item ${i === currentPage ? 'active' : ''}">
+                    <a class="page-link" href="#" onclick="changePage(${i})">${i}</a>
+                </li>
+            `;
+        }
+        
+        paginationHTML += `
+            <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="changePage(${currentPage + 1})">Next</a>
+            </li>
+        `;
+        
+        pagination.innerHTML = paginationHTML;
+    }
+
+    function changePage(page) {
+        const totalPages = Math.ceil(filteredTrades.length / tradesPerPage);
+        if (page >= 1 && page <= totalPages) {
+            currentPage = page;
+            updateTradesTable();
+        }
+    }
+
+    function viewTrade(tradeId) {
+        currentTradeId = tradeId;
+        const trade = allTrades.find(t => t.id === tradeId);
+        if (trade) {
+            populateTradeModal(trade);
+            tradeModal.show();
+        }
+    }
+
+    function populateTradeModal(trade) {
+        document.getElementById('modal-trade-id').textContent = trade.id;
+        document.getElementById('modal-trade-account').textContent = getAccountName(trade.account_id);
+        document.getElementById('modal-trade-symbol').textContent = trade.symbol;
+        document.getElementById('modal-trade-side').textContent = trade.side;
+        document.getElementById('modal-trade-type').textContent = trade.order_type;
+        document.getElementById('modal-trade-quantity').textContent = trade.quantity;
+        document.getElementById('modal-trade-price').textContent = trade.price ? trade.price.toFixed(2) : '-';
+        document.getElementById('modal-trade-stop-price').textContent = trade.stop_price ? trade.stop_price.toFixed(2) : '-';
+        document.getElementById('modal-trade-take-profit').textContent = trade.take_profit_price ? trade.take_profit_price.toFixed(2) : '-';
+        document.getElementById('modal-trade-status').textContent = trade.status;
+        document.getElementById('modal-trade-copied').textContent = trade.copied_from_master ? 'Yes' : 'No';
+        document.getElementById('modal-trade-master-id').textContent = trade.master_trade_id || '-';
+        document.getElementById('modal-trade-binance-id').textContent = trade.binance_order_id || '-';
+        document.getElementById('modal-trade-created').textContent = new Date(trade.created_at).toLocaleString();
+        document.getElementById('modal-trade-updated').textContent = new Date(trade.updated_at).toLocaleString();
+    }
+
+    function cancelTrade(tradeId) {
+        if (confirm('Are you sure you want to cancel this trade?')) {
+            // This would typically make an API call to cancel the trade
+            alert('Cancel functionality would be implemented here');
+        }
+    }
+
+    function refreshTrades() {
+        socket.emit('request_trades');
+    }
+
+    function exportTrades() {
+        // This would typically generate and download a CSV file
+        alert('Export functionality would be implemented here');
+    }
+
+    function getAccountName(accountId) {
+        // This would typically look up the account name from accounts data
+        return `Account ${accountId}`;
+    }
+
+    function getStatusBadgeClass(status) {
+        switch (status) {
+            case 'FILLED': return 'success';
+            case 'PENDING': return 'warning';
+            case 'CANCELLED': return 'secondary';
+            case 'REJECTED': return 'danger';
+            default: return 'secondary';
+        }
+    }
+
+    // Auto-refresh trades every 30 seconds
+    setInterval(refreshTrades, 30000);
+</script>
+{% endblock %}

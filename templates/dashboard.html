@@ -1,0 +1,334 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Copy Trading Bot{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- System Status -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-tachometer-alt me-2"></i>
+                    System Status
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-value" id="master-accounts">-</div>
+                            <div class="metric-label">Master Accounts</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-value" id="follower-accounts">-</div>
+                            <div class="metric-label">Follower Accounts</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-value" id="active-trades">-</div>
+                            <div class="metric-label">Active Trades</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-value" id="total-pnl">-</div>
+                            <div class="metric-label">Total P&L</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Controls -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-cogs me-2"></i>
+                    System Controls
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <form method="POST" action="/api/system/initialize" style="display: inline;">
+                            <button type="submit" class="btn btn-primary w-100">
+                                <i class="fas fa-play me-2"></i>
+                                Initialize System
+                            </button>
+                        </form>
+                    </div>
+                    <div class="col-md-3">
+                        <form method="POST" action="/api/system/start" style="display: inline;">
+                            <button type="submit" class="btn btn-success w-100">
+                                <i class="fas fa-play-circle me-2"></i>
+                                Start Copy Trading
+                            </button>
+                        </form>
+                    </div>
+                    <div class="col-md-3">
+                        <form method="POST" action="/api/system/stop" style="display: inline;">
+                            <button type="submit" class="btn btn-warning w-100">
+                                <i class="fas fa-pause-circle me-2"></i>
+                                Stop Copy Trading
+                            </button>
+                        </form>
+                    </div>
+                    <div class="col-md-3">
+                        <button type="button" class="btn btn-info w-100" onclick="refreshData()">
+                            <i class="fas fa-sync-alt me-2"></i>
+                            Refresh Data
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Trades -->
+    <div class="col-md-8 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-exchange-alt me-2"></i>
+                    Recent Trades
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Type</th>
+                                <th>Quantity</th>
+                                <th>Status</th>
+                                <th>Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recent-trades-table">
+                            <tr>
+                                <td colspan="6" class="text-center">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Logs -->
+    <div class="col-md-4 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-list me-2"></i>
+                    Recent Logs
+                </h5>
+            </div>
+            <div class="card-body">
+                <div id="recent-logs" style="max-height: 400px; overflow-y: auto;">
+                    <div class="text-center">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Account Overview -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-users me-2"></i>
+                    Account Overview
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Balance</th>
+                                <th>Leverage</th>
+                                <th>Risk %</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accounts-table">
+                            <tr>
+                                <td colspan="7" class="text-center">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Request initial data
+    socket.emit('request_system_status');
+    socket.emit('request_accounts');
+    socket.emit('request_trades');
+    socket.emit('request_logs');
+
+    // Handle system status updates
+    socket.on('system_status_update', function(data) {
+        updateSystemMetrics(data);
+    });
+
+    // Handle accounts updates
+    socket.on('accounts_update', function(data) {
+        updateAccountsTable(data);
+        updateAccountMetrics(data);
+    });
+
+    // Handle trades updates
+    socket.on('trades_update', function(data) {
+        updateTradesTable(data);
+        updateTradeMetrics(data);
+    });
+
+    // Handle logs updates
+    socket.on('logs_update', function(data) {
+        updateLogs(data);
+    });
+
+    function updateSystemMetrics(data) {
+        const engine = data.copy_trading_engine;
+        document.getElementById('master-accounts').textContent = engine.master_accounts || 0;
+        document.getElementById('follower-accounts').textContent = engine.follower_accounts || 0;
+    }
+
+    function updateAccountsTable(accounts) {
+        const tbody = document.getElementById('accounts-table');
+        if (accounts.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center">No accounts found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = accounts.map(account => `
+            <tr>
+                <td>${account.name}</td>
+                <td>
+                    <span class="badge ${account.is_master ? 'bg-primary' : 'bg-secondary'}">
+                        ${account.is_master ? 'Master' : 'Follower'}
+                    </span>
+                </td>
+                <td>
+                    <span class="status-indicator ${account.is_active ? 'status-online' : 'status-offline'}"></span>
+                    ${account.is_active ? 'Active' : 'Inactive'}
+                </td>
+                <td>$${account.balance ? account.balance.toFixed(2) : '0.00'}</td>
+                <td>${account.leverage}x</td>
+                <td>${account.risk_percentage}%</td>
+                <td>
+                    <a href="/accounts" class="btn btn-sm btn-outline-primary">
+                        <i class="fas fa-edit"></i>
+                    </a>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function updateAccountMetrics(accounts) {
+        const masterAccounts = accounts.filter(acc => acc.is_master).length;
+        const followerAccounts = accounts.filter(acc => !acc.is_master).length;
+        
+        document.getElementById('master-accounts').textContent = masterAccounts;
+        document.getElementById('follower-accounts').textContent = followerAccounts;
+    }
+
+    function updateTradesTable(trades) {
+        const tbody = document.getElementById('recent-trades-table');
+        if (trades.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center">No trades found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = trades.slice(0, 10).map(trade => `
+            <tr>
+                <td>${trade.symbol}</td>
+                <td>
+                    <span class="badge ${trade.side === 'BUY' ? 'bg-success' : 'bg-danger'}">
+                        ${trade.side}
+                    </span>
+                </td>
+                <td>${trade.order_type}</td>
+                <td>${trade.quantity}</td>
+                <td>
+                    <span class="badge ${getStatusBadgeClass(trade.status)}">
+                        ${trade.status}
+                    </span>
+                </td>
+                <td>${new Date(trade.created_at).toLocaleString()}</td>
+            </tr>
+        `).join('');
+    }
+
+    function updateTradeMetrics(trades) {
+        const activeTrades = trades.filter(trade => trade.status === 'PENDING' || trade.status === 'FILLED').length;
+        document.getElementById('active-trades').textContent = activeTrades;
+    }
+
+    function updateLogs(logs) {
+        const container = document.getElementById('recent-logs');
+        if (logs.length === 0) {
+            container.innerHTML = '<div class="text-center">No logs found</div>';
+            return;
+        }
+
+        container.innerHTML = logs.slice(0, 10).map(log => `
+            <div class="mb-2 p-2 border-start border-${getLogLevelClass(log.level)}" style="border-left-width: 4px;">
+                <div class="d-flex justify-content-between">
+                    <small class="text-muted">${new Date(log.created_at).toLocaleTimeString()}</small>
+                    <span class="badge bg-${getLogLevelClass(log.level)}">${log.level}</span>
+                </div>
+                <div class="mt-1">${log.message}</div>
+            </div>
+        `).join('');
+    }
+
+    function getStatusBadgeClass(status) {
+        switch (status) {
+            case 'FILLED': return 'success';
+            case 'PENDING': return 'warning';
+            case 'CANCELLED': return 'secondary';
+            case 'REJECTED': return 'danger';
+            default: return 'secondary';
+        }
+    }
+
+    function getLogLevelClass(level) {
+        switch (level) {
+            case 'ERROR': return 'danger';
+            case 'WARNING': return 'warning';
+            case 'INFO': return 'info';
+            case 'DEBUG': return 'secondary';
+            default: return 'secondary';
+        }
+    }
+
+    function refreshData() {
+        socket.emit('request_system_status');
+        socket.emit('request_accounts');
+        socket.emit('request_trades');
+        socket.emit('request_logs');
+    }
+
+    // Auto-refresh every 30 seconds
+    setInterval(refreshData, 30000);
+</script>
+{% endblock %}

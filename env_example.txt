@@ -1,0 +1,42 @@
+# Copy Trading Bot Configuration
+# Copy this file to .env and update the values
+
+# Database Configuration
+DATABASE_URL=sqlite:///./copy_trading.db
+# For PostgreSQL: DATABASE_URL=postgresql://user:password@localhost/copytrading
+
+# Redis Configuration (optional, for caching)
+REDIS_URL=redis://localhost:6379
+
+# Security
+SECRET_KEY=your-super-secret-key-change-this-immediately
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# Binance API Configuration
+BINANCE_API_KEY=your-binance-api-key
+BINANCE_SECRET_KEY=your-binance-secret-key
+BINANCE_TESTNET=false
+
+# Copy Trading Settings
+DEFAULT_LEVERAGE=10
+DEFAULT_RISK_PERCENTAGE=10.0
+MAX_LEVERAGE=20
+
+# Trading Settings
+MIN_ORDER_SIZE=10.0
+MAX_ORDER_SIZE=10000.0
+
+# WebSocket Settings
+WEBSOCKET_PING_INTERVAL=20
+WEBSOCKET_PING_TIMEOUT=20
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FILE=copy_trading.log
+
+# Monitoring
+HEALTH_CHECK_INTERVAL=30
+TRADE_SYNC_DELAY=1.0
+
+# API Token for Dashboard
+API_TOKEN=your-secret-token

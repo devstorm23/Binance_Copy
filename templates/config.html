@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+
+{% block title %}Configuration - Copy Trading Bot{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Add Configuration Form -->
+    <div class="col-md-4 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-plus me-2"></i>
+                    Add Copy Trading Configuration
+                </h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="/api/config/create">
+                    <div class="mb-3">
+                        <label for="master_account_id" class="form-label">Master Account</label>
+                        <select class="form-select" id="master_account_id" name="master_account_id" required>
+                            <option value="">Select Master Account</option>
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="follower_account_id" class="form-label">Follower Account</label>
+                        <select class="form-select" id="follower_account_id" name="follower_account_id" required>
+                            <option value="">Select Follower Account</option>
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="copy_percentage" class="form-label">Copy Percentage (%)</label>
+                        <input type="number" class="form-control" id="copy_percentage" name="copy_percentage" 
+                               value="100.0" min="1" max="100" step="0.1" required>
+                        <div class="form-text">Percentage of master trades to copy</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="risk_multiplier" class="form-label">Risk Multiplier</label>
+                        <input type="number" class="form-control" id="risk_multiplier" name="risk_multiplier" 
+                               value="1.0" min="0.1" max="10" step="0.1" required>
+                        <div class="form-text">Multiplier for position sizing (1.0 = same risk as master)</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="max_risk_percentage" class="form-label">Max Risk Per Trade (%)</label>
+                        <input type="number" class="form-control" id="max_risk_percentage" name="max_risk_percentage" 
+                               value="50.0" min="1" max="100" step="1" required>
+                        <div class="form-text">Maximum risk percentage per trade (50% allows proper proportional scaling)</div>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="fas fa-save me-2"></i>
+                        Create Configuration
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configurations List -->
+    <div class="col-md-8 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-cog me-2"></i>
+                    Copy Trading Configurations
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover">
+                        <thead>
+                            <tr>
+                                <th>Master Account</th>
+                                <th>Follower Account</th>
+                                <th>Copy %</th>
+                                <th>Risk Multiplier</th>
+                                <th>Max Risk %</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="configs-table">
+                            <tr>
+                                <td colspan="7" class="text-center">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Configuration Details Modal -->
+<div class="modal fade" id="configModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Configuration Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Configuration</h6>
+                        <table class="table table-sm">
+                            <tr>
+                                <td>Master:</td>
+                                <td id="modal-master-account">-</td>
+                            </tr>
+                            <tr>
+                                <td>Follower:</td>
+                                <td id="modal-follower-account">-</td>
+                            </tr>
+                            <tr>
+                                <td>Copy %:</td>
+                                <td id="modal-copy-percentage">-</td>
+                            </tr>
+                            <tr>
+                                <td>Risk Multiplier:</td>
+                                <td id="modal-risk-multiplier">-</td>
+                            </tr>
+                            <tr>
+                                <td>Max Risk %:</td>
+                                <td id="modal-max-risk-percentage">-</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Statistics</h6>
+                        <table class="table table-sm">
+                            <tr>
+                                <td>Total Trades:</td>
+                                <td id="modal-total-trades">-</td>
+                            </tr>
+                            <tr>
+                                <td>Success Rate:</td>
+                                <td id="modal-success-rate">-</td>
+                            </tr>
+                            <tr>
+                                <td>Total P&L:</td>
+                                <td id="modal-total-pnl">-</td>
+                            </tr>
+                            <tr>
+                                <td>Created:</td>
+                                <td id="modal-created">-</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-warning" onclick="toggleConfig()">
+                    <i class="fas fa-toggle-on me-2"></i>
+                    Toggle Status
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentConfigId = null;
+    let accounts = [];
+    let configs = [];
+    const configModal = new bootstrap.Modal(document.getElementById('configModal'));
+
+    // Request initial data
+    socket.emit('request_accounts');
+    socket.emit('request_copy_configs');
+
+    // Handle accounts updates
+    socket.on('accounts_update', function(data) {
+        accounts = data;
+        updateAccountSelects();
+    });
+
+    // Handle copy configs updates
+    socket.on('copy_configs_update', function(data) {
+        configs = data;
+        updateConfigsTable();
+    });
+
+    function updateAccountSelects() {
+        const masterSelect = document.getElementById('master_account_id');
+        const followerSelect = document.getElementById('follower_account_id');
+        
+        // Clear existing options
+        masterSelect.innerHTML = '<option value="">Select Master Account</option>';
+        followerSelect.innerHTML = '<option value="">Select Follower Account</option>';
+        
+        // Add master accounts
+        accounts.filter(acc => acc.is_master).forEach(account => {
+            const option = document.createElement('option');
+            option.value = account.id;
+            option.textContent = account.name;
+            masterSelect.appendChild(option);
+        });
+        
+        // Add follower accounts
+        accounts.filter(acc => !acc.is_master).forEach(account => {
+            const option = document.createElement('option');
+            option.value = account.id;
+            option.textContent = account.name;
+            followerSelect.appendChild(option);
+        });
+    }
+
+    function updateConfigsTable() {
+        const tbody = document.getElementById('configs-table');
+        
+        if (configs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center">No configurations found</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = '';
+        configs.forEach(config => {
+            const masterAccount = accounts.find(acc => acc.id === config.master_account_id);
+            const followerAccount = accounts.find(acc => acc.id === config.follower_account_id);
+            
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${masterAccount ? masterAccount.name : 'Unknown'}</td>
+                <td>${followerAccount ? followerAccount.name : 'Unknown'}</td>
+                <td>${config.copy_percentage}%</td>
+                <td>${config.risk_multiplier}</td>
+                <td>${config.max_risk_percentage || 50}%</td>
+                <td>
+                    <span class="badge ${config.is_active ? 'bg-success' : 'bg-secondary'}">
+                        ${config.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                </td>
+                <td>
+                    <button class="btn btn-sm btn-outline-info me-1" onclick="viewConfig(${config.id})">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteConfig(${config.id})">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </td>
+            `;
+            tbody.appendChild(row);
+        });
+    }
+    
+    function loadConfigurations() {
+        // Request fresh data
+        socket.emit('request_copy_configs');
+    }
+
+    function viewConfig(configId) {
+        currentConfigId = configId;
+        
+        // Find config data
+        const config = configs.find(c => c.id === configId);
+        if (config) {
+            populateConfigModal(config);
+            configModal.show();
+        }
+    }
+
+    function populateConfigModal(config) {
+        const masterAccount = accounts.find(acc => acc.id === config.master_account_id);
+        const followerAccount = accounts.find(acc => acc.id === config.follower_account_id);
+        
+        document.getElementById('modal-master-account').textContent = masterAccount ? masterAccount.name : 'Unknown';
+        document.getElementById('modal-follower-account').textContent = followerAccount ? followerAccount.name : 'Unknown';
+        document.getElementById('modal-copy-percentage').textContent = `${config.copy_percentage}%`;
+        document.getElementById('modal-risk-multiplier').textContent = config.risk_multiplier;
+        document.getElementById('modal-max-risk-percentage').textContent = `${config.max_risk_percentage || 50}%`;
+        document.getElementById('modal-created').textContent = new Date(config.created_at).toLocaleString();
+        
+        // Placeholder statistics
+        document.getElementById('modal-total-trades').textContent = '0';
+        document.getElementById('modal-success-rate').textContent = '0%';
+        document.getElementById('modal-total-pnl').textContent = '$0.00';
+    }
+
+    function toggleConfig() {
+        if (currentConfigId) {
+            // TODO: Implement toggle functionality
+            console.log('Toggle config:', currentConfigId);
+            alert('Toggle functionality is not yet implemented');
+        }
+    }
+
+    function deleteConfig(configId) {
+        if (confirm('Are you sure you want to delete this configuration? This action cannot be undone.')) {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = `/api/config/${configId}/delete`;
+            document.body.appendChild(form);
+            form.submit();
+        }
+    }
+
+    // Load configurations on page load
+    loadConfigurations();
+    
+    // Cache buster: Updated at 2025-01-15 12:50 - Delete function fixed
+</script>
+{% endblock %}

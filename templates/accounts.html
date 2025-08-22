@@ -1,0 +1,370 @@
+{% extends "base.html" %}
+
+{% block title %}Accounts - Copy Trading Bot{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Add Account Form -->
+    <div class="col-md-4 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-plus me-2"></i>
+                    Add New Account
+                </h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="/api/accounts/create" id="account-form">
+                    <div class="mb-3">
+                        <label for="name" class="form-label">Account Name</label>
+                        <input type="text" class="form-control" id="name" name="name" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="api_key" class="form-label">API Key</label>
+                        <input type="text" class="form-control" id="api_key" name="api_key" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="secret_key" class="form-label">Secret Key</label>
+                        <input type="password" class="form-control" id="secret_key" name="secret_key" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="is_master" name="is_master">
+                            <label class="form-check-label" for="is_master">
+                                Master Account (Source for copy trading)
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="leverage" class="form-label">Default Leverage</label>
+                        <select class="form-select" id="leverage" name="leverage">
+                            <option value="1">1x</option>
+                            <option value="2">2x</option>
+                            <option value="3">3x</option>
+                            <option value="5">5x</option>
+                            <option value="10" selected>10x</option>
+                            <option value="15">15x</option>
+                            <option value="20">20x</option>
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="risk_percentage" class="form-label">Risk Percentage (%)</label>
+                        <input type="number" class="form-control" id="risk_percentage" name="risk_percentage" 
+                               value="10.0" min="1" max="100" step="0.1" required>
+                        <div class="form-text">Percentage of account balance to risk per trade</div>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary w-100" id="submit-btn">
+                        <i class="fas fa-save me-2"></i>
+                        <span id="submit-text">Add Account</span>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Accounts List -->
+    <div class="col-md-8 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-users me-2"></i>
+                    Manage Accounts
+                </h5>
+                <div class="connection-status">
+                    <span id="connection-indicator" class="badge bg-secondary">Checking...</span>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Balance</th>
+                                <th>Leverage</th>
+                                <th>Risk %</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accounts-table">
+                            <tr>
+                                <td colspan="7" class="text-center">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Account Details Modal -->
+<div class="modal fade" id="accountModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Account Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Account Information</h6>
+                        <table class="table table-sm">
+                            <tr>
+                                <td>Name:</td>
+                                <td id="modal-account-name">-</td>
+                            </tr>
+                            <tr>
+                                <td>Type:</td>
+                                <td id="modal-account-type">-</td>
+                            </tr>
+                            <tr>
+                                <td>Status:</td>
+                                <td id="modal-account-status">-</td>
+                            </tr>
+                            <tr>
+                                <td>Created:</td>
+                                <td id="modal-account-created">-</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Trading Settings</h6>
+                        <table class="table table-sm">
+                            <tr>
+                                <td>Balance:</td>
+                                <td id="modal-account-balance">-</td>
+                            </tr>
+                            <tr>
+                                <td>Leverage:</td>
+                                <td id="modal-account-leverage">-</td>
+                            </tr>
+                            <tr>
+                                <td>Risk %:</td>
+                                <td id="modal-account-risk">-</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+                
+                <div class="mt-3">
+                    <h6>Recent Positions</h6>
+                    <div id="modal-positions" class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Size</th>
+                                    <th>Entry Price</th>
+                                    <th>P&L</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modal-positions-table">
+                                <tr>
+                                    <td colspan="5" class="text-center">Loading...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" onclick="refreshAccountData()">
+                    <i class="fas fa-sync-alt me-2"></i>
+                    Refresh Data
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentAccountId = null;
+    const accountModal = new bootstrap.Modal(document.getElementById('accountModal'));
+
+    // Request initial data
+    socket.emit('request_accounts');
+
+    // Handle accounts updates
+    socket.on('accounts_update', function(data) {
+        updateAccountsTable(data);
+    });
+
+    // Handle connection errors
+    socket.on('connect_error', function(error) {
+        console.error('Socket connection error:', error);
+        document.getElementById('accounts-table').innerHTML = 
+            '<tr><td colspan="7" class="text-center text-warning">Connection error. Please refresh the page.</td></tr>';
+    });
+
+    socket.on('disconnect', function(reason) {
+        console.log('Socket disconnected:', reason);
+        if (reason === 'io server disconnect') {
+            // the disconnection was initiated by the server, reconnect manually
+            socket.connect();
+        }
+    });
+
+    function updateAccountsTable(accounts) {
+        const tbody = document.getElementById('accounts-table');
+        
+        // Check if accounts is an array and handle errors
+        if (!accounts || !Array.isArray(accounts)) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-warning">Error loading accounts. Please check API connection.</td></tr>';
+            return;
+        }
+        
+        if (accounts.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center">No accounts found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = accounts.map(account => `
+            <tr>
+                <td>${account.name || 'N/A'}</td>
+                <td>
+                    <span class="badge ${account.is_master ? 'bg-primary' : 'bg-secondary'}">
+                        ${account.is_master ? 'Master' : 'Follower'}
+                    </span>
+                </td>
+                <td>
+                    <span class="status-indicator ${account.is_active ? 'status-online' : 'status-offline'}"></span>
+                    ${account.is_active ? 'Active' : 'Inactive'}
+                </td>
+                <td>$${account.balance ? account.balance.toFixed(2) : '0.00'}</td>
+                <td>${account.leverage || 10}x</td>
+                <td>${account.risk_percentage || 10}%</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-info me-1" onclick="viewAccount(${account.id})">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-warning me-1" onclick="editAccount(${account.id})">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteAccount(${account.id}, '${account.name || 'Unknown'}')">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function viewAccount(accountId) {
+        currentAccountId = accountId;
+        
+        // Find account data
+        socket.emit('request_accounts');
+        socket.once('accounts_update', function(accounts) {
+            // Check if accounts is an array
+            if (!accounts || !Array.isArray(accounts)) {
+                alert('Error loading account data. Please check API connection.');
+                return;
+            }
+            
+            const account = accounts.find(acc => acc.id === accountId);
+            if (account) {
+                populateAccountModal(account);
+                accountModal.show();
+                
+                // Load positions
+                loadAccountPositions(accountId);
+            } else {
+                alert('Account not found.');
+            }
+        });
+    }
+
+    function populateAccountModal(account) {
+        document.getElementById('modal-account-name').textContent = account.name;
+        document.getElementById('modal-account-type').textContent = account.is_master ? 'Master' : 'Follower';
+        document.getElementById('modal-account-status').textContent = account.is_active ? 'Active' : 'Inactive';
+        document.getElementById('modal-account-created').textContent = new Date(account.created_at).toLocaleString();
+        document.getElementById('modal-account-balance').textContent = `$${account.balance ? account.balance.toFixed(2) : '0.00'}`;
+        document.getElementById('modal-account-leverage').textContent = `${account.leverage}x`;
+        document.getElementById('modal-account-risk').textContent = `${account.risk_percentage}%`;
+    }
+
+    function loadAccountPositions(accountId) {
+        // This would typically make an API call to get positions
+        // For now, we'll show a placeholder
+        const tbody = document.getElementById('modal-positions-table');
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center">No positions found</td></tr>';
+    }
+
+    function editAccount(accountId) {
+        // Redirect to edit page or show edit modal
+        alert('Edit functionality would be implemented here');
+    }
+
+    function deleteAccount(accountId, accountName) {
+        if (confirm(`Are you sure you want to delete account "${accountName}"? This action cannot be undone.`)) {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = `/api/accounts/${accountId}/delete`;
+            document.body.appendChild(form);
+            form.submit();
+        }
+    }
+
+    function refreshAccountData() {
+        if (currentAccountId) {
+            loadAccountPositions(currentAccountId);
+        }
+    }
+
+    // Auto-refresh accounts every 30 seconds
+    setInterval(function() {
+        socket.emit('request_accounts');
+    }, 30000);
+
+    // Check API connection status
+    function checkConnectionStatus() {
+        fetch('/api/health')
+            .then(response => response.json())
+            .then(data => {
+                const indicator = document.getElementById('connection-indicator');
+                if (data.status === 'connected') {
+                    indicator.className = 'badge bg-success';
+                    indicator.textContent = 'Connected';
+                } else {
+                    indicator.className = 'badge bg-danger';
+                    indicator.textContent = 'Disconnected';
+                }
+            })
+            .catch(error => {
+                const indicator = document.getElementById('connection-indicator');
+                indicator.className = 'badge bg-danger';
+                indicator.textContent = 'Error';
+                console.error('Connection check failed:', error);
+            });
+    }
+
+    // Check connection status on page load and every 30 seconds
+    checkConnectionStatus();
+    setInterval(checkConnectionStatus, 30000);
+
+    // Handle form submission with better feedback
+    document.getElementById('account-form').addEventListener('submit', function(e) {
+        const submitBtn = document.getElementById('submit-btn');
+        const submitText = document.getElementById('submit-text');
+        
+        // Disable button and show loading state
+        submitBtn.disabled = true;
+        submitText.textContent = 'Adding Account...';
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i><span id="submit-text">Adding Account...</span>';
+    });
+</script>
+{% endblock %}

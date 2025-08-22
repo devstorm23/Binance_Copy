@@ -1,0 +1,61 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dylib
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Environment files
+# .env
+# .env.*
+
+# Build and packaging
+build/
+dist/
+pip-wheel-metadata/
+*.egg-info/
+
+# Testing and coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Type checking and caches
+.mypy_cache/
+.pytype/
+.ruff_cache/
+.cache/
+
+# Logs and databases
+*.log
+copy_trading.db
+*.sqlite
+*.sqlite3
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.iml
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Node (if present for dashboard/static assets)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+

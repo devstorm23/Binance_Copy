@@ -1,0 +1,477 @@
+{% extends "base.html" %}
+
+{% block title %}Logs - Copy Trading Bot{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Log Filters -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-filter me-2"></i>
+                    Log Filters
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-2">
+                        <label for="filter-level" class="form-label">Log Level</label>
+                        <select class="form-select" id="filter-level">
+                            <option value="">All Levels</option>
+                            <option value="ERROR">Error</option>
+                            <option value="WARNING">Warning</option>
+                            <option value="INFO">Info</option>
+                            <option value="DEBUG">Debug</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filter-account" class="form-label">Account</label>
+                        <select class="form-select" id="filter-account">
+                            <option value="">All Accounts</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filter-date-from" class="form-label">From Date</label>
+                        <input type="datetime-local" class="form-control" id="filter-date-from">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filter-date-to" class="form-label">To Date</label>
+                        <input type="datetime-local" class="form-control" id="filter-date-to">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filter-search" class="form-label">Search</label>
+                        <input type="text" class="form-control" id="filter-search" placeholder="Search messages...">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">&nbsp;</label>
+                        <div class="d-grid gap-2">
+                            <button type="button" class="btn btn-primary" onclick="applyFilters()">
+                                <i class="fas fa-search me-2"></i>
+                                Apply Filters
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="clearFilters()">
+                                <i class="fas fa-times me-2"></i>
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Log Statistics -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-chart-pie me-2"></i>
+                    Log Statistics
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value" id="total-logs">-</div>
+                            <div class="metric-label">Total Logs</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value text-danger" id="error-logs">-</div>
+                            <div class="metric-label">Errors</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value text-warning" id="warning-logs">-</div>
+                            <div class="metric-label">Warnings</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value text-info" id="info-logs">-</div>
+                            <div class="metric-label">Info</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value text-secondary" id="debug-logs">-</div>
+                            <div class="metric-label">Debug</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="metric-card">
+                            <div class="metric-value" id="today-logs">-</div>
+                            <div class="metric-label">Today</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Logs Table -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-list me-2"></i>
+                    System Logs
+                </h5>
+                <div>
+                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="refreshLogs()">
+                        <i class="fas fa-sync-alt me-2"></i>
+                        Refresh
+                    </button>
+                    <button type="button" class="btn btn-outline-success btn-sm" onclick="exportLogs()">
+                        <i class="fas fa-download me-2"></i>
+                        Export
+                    </button>
+                    <button type="button" class="btn btn-outline-warning btn-sm" onclick="cleanupOldLogs()">
+                        <i class="fas fa-broom me-2"></i>
+                        Cleanup Old
+                    </button>
+                    <button type="button" class="btn btn-outline-danger btn-sm" onclick="clearLogs()">
+                        <i class="fas fa-trash me-2"></i>
+                        Clear All
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Level</th>
+                                <th>Message</th>
+                                <th>Account</th>
+                                <th>Trade ID</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logs-table">
+                            <tr>
+                                <td colspan="6" class="text-center">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Pagination -->
+                <nav aria-label="Logs pagination">
+                    <ul class="pagination justify-content-center" id="logs-pagination">
+                        <li class="page-item disabled">
+                            <a class="page-link" href="#" tabindex="-1">Previous</a>
+                        </li>
+                        <li class="page-item active">
+                            <a class="page-link" href="#">1</a>
+                        </li>
+                        <li class="page-item disabled">
+                            <a class="page-link" href="#">Next</a>
+                        </li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Log Details Modal -->
+<div class="modal fade" id="logModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Log Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Log Information</h6>
+                        <table class="table table-sm">
+                            <tr>
+                                <td>Log ID:</td>
+                                <td id="modal-log-id">-</td>
+                            </tr>
+                            <tr>
+                                <td>Level:</td>
+                                <td id="modal-log-level">-</td>
+                            </tr>
+                            <tr>
+                                <td>Time:</td>
+                                <td id="modal-log-time">-</td>
+                            </tr>
+                            <tr>
+                                <td>Account:</td>
+                                <td id="modal-log-account">-</td>
+                            </tr>
+                            <tr>
+                                <td>Trade ID:</td>
+                                <td id="modal-log-trade">-</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Message</h6>
+                        <div class="border rounded p-3" style="background-color: #404040;">
+                            <pre id="modal-log-message" class="mb-0" style="white-space: pre-wrap; word-wrap: break-word;"></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-info" onclick="copyLogMessage()">
+                    <i class="fas fa-copy me-2"></i>
+                    Copy Message
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let allLogs = [];
+    let filteredLogs = [];
+    let currentPage = 1;
+    const logsPerPage = 50;
+    const logModal = new bootstrap.Modal(document.getElementById('logModal'));
+
+    // Request initial data
+    socket.emit('request_logs');
+    socket.emit('request_accounts');
+
+    // Handle logs updates
+    socket.on('logs_update', function(data) {
+        allLogs = data;
+        filteredLogs = [...allLogs];
+        updateLogsTable();
+        updateLogStatistics();
+        updateLogFilters();
+    });
+
+    function updateLogsTable() {
+        const tbody = document.getElementById('logs-table');
+        const startIndex = (currentPage - 1) * logsPerPage;
+        const endIndex = startIndex + logsPerPage;
+        const pageLogs = filteredLogs.slice(startIndex, endIndex);
+
+        if (pageLogs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center">No logs found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = pageLogs.map(log => `
+            <tr>
+                <td>${new Date(log.created_at).toLocaleString()}</td>
+                <td>
+                    <span class="badge ${getLogLevelBadgeClass(log.level)}">
+                        ${log.level}
+                    </span>
+                </td>
+                <td>
+                    <div class="text-truncate" style="max-width: 300px;" title="${log.message}">
+                        ${log.message}
+                    </div>
+                </td>
+                <td>${log.account_id ? `Account ${log.account_id}` : '-'}</td>
+                <td>${log.trade_id || '-'}</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-info" onclick="viewLog(${log.id})">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+
+        updateLogsPagination();
+    }
+
+    function updateLogStatistics() {
+        const totalLogs = allLogs.length;
+        const errorLogs = allLogs.filter(l => l.level === 'ERROR').length;
+        const warningLogs = allLogs.filter(l => l.level === 'WARNING').length;
+        const infoLogs = allLogs.filter(l => l.level === 'INFO').length;
+        const debugLogs = allLogs.filter(l => l.level === 'DEBUG').length;
+        
+        const today = new Date().toDateString();
+        const todayLogs = allLogs.filter(l => new Date(l.created_at).toDateString() === today).length;
+
+        document.getElementById('total-logs').textContent = totalLogs;
+        document.getElementById('error-logs').textContent = errorLogs;
+        document.getElementById('warning-logs').textContent = warningLogs;
+        document.getElementById('info-logs').textContent = infoLogs;
+        document.getElementById('debug-logs').textContent = debugLogs;
+        document.getElementById('today-logs').textContent = todayLogs;
+    }
+
+    function updateLogFilters() {
+        const accountSelect = document.getElementById('filter-account');
+        
+        // Get unique accounts
+        const accounts = [...new Set(allLogs.filter(l => l.account_id).map(l => l.account_id))];
+        
+        // Update account filter
+        accountSelect.innerHTML = '<option value="">All Accounts</option>';
+        accounts.forEach(accountId => {
+            const option = document.createElement('option');
+            option.value = accountId;
+            option.textContent = `Account ${accountId}`;
+            accountSelect.appendChild(option);
+        });
+    }
+
+    function applyFilters() {
+        const levelFilter = document.getElementById('filter-level').value;
+        const accountFilter = document.getElementById('filter-account').value;
+        const dateFromFilter = document.getElementById('filter-date-from').value;
+        const dateToFilter = document.getElementById('filter-date-to').value;
+        const searchFilter = document.getElementById('filter-search').value.toLowerCase();
+
+        filteredLogs = allLogs.filter(log => {
+            if (levelFilter && log.level !== levelFilter) return false;
+            if (accountFilter && log.account_id != accountFilter) return false;
+            if (dateFromFilter && new Date(log.created_at) < new Date(dateFromFilter)) return false;
+            if (dateToFilter && new Date(log.created_at) > new Date(dateToFilter)) return false;
+            if (searchFilter && !log.message.toLowerCase().includes(searchFilter)) return false;
+            return true;
+        });
+
+        currentPage = 1;
+        updateLogsTable();
+    }
+
+    function clearFilters() {
+        document.getElementById('filter-level').value = '';
+        document.getElementById('filter-account').value = '';
+        document.getElementById('filter-date-from').value = '';
+        document.getElementById('filter-date-to').value = '';
+        document.getElementById('filter-search').value = '';
+        
+        filteredLogs = [...allLogs];
+        currentPage = 1;
+        updateLogsTable();
+    }
+
+    function updateLogsPagination() {
+        const totalPages = Math.ceil(filteredLogs.length / logsPerPage);
+        const pagination = document.getElementById('logs-pagination');
+        
+        let paginationHTML = `
+            <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="changeLogsPage(${currentPage - 1})">Previous</a>
+            </li>
+        `;
+        
+        for (let i = 1; i <= totalPages; i++) {
+            paginationHTML += `
+                <li class="page-item ${i === currentPage ? 'active' : ''}">
+                    <a class="page-link" href="#" onclick="changeLogsPage(${i})">${i}</a>
+                </li>
+            `;
+        }
+        
+        paginationHTML += `
+            <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="changeLogsPage(${currentPage + 1})">Next</a>
+            </li>
+        `;
+        
+        pagination.innerHTML = paginationHTML;
+    }
+
+    function changeLogsPage(page) {
+        const totalPages = Math.ceil(filteredLogs.length / logsPerPage);
+        if (page >= 1 && page <= totalPages) {
+            currentPage = page;
+            updateLogsTable();
+        }
+    }
+
+    function viewLog(logId) {
+        const log = allLogs.find(l => l.id === logId);
+        if (log) {
+            populateLogModal(log);
+            logModal.show();
+        }
+    }
+
+    function populateLogModal(log) {
+        document.getElementById('modal-log-id').textContent = log.id;
+        document.getElementById('modal-log-level').textContent = log.level;
+        document.getElementById('modal-log-time').textContent = new Date(log.created_at).toLocaleString();
+        document.getElementById('modal-log-account').textContent = log.account_id ? `Account ${log.account_id}` : '-';
+        document.getElementById('modal-log-trade').textContent = log.trade_id || '-';
+        document.getElementById('modal-log-message').textContent = log.message;
+    }
+
+    function copyLogMessage() {
+        const message = document.getElementById('modal-log-message').textContent;
+        navigator.clipboard.writeText(message).then(() => {
+            alert('Log message copied to clipboard!');
+        });
+    }
+
+    function refreshLogs() {
+        socket.emit('request_logs');
+    }
+
+    function exportLogs() {
+        // This would typically generate and download a CSV file
+        alert('Export functionality would be implemented here');
+    }
+
+    function cleanupOldLogs() {
+        if (confirm('Clean up old logs? This will keep only the most recent 500 logs per level.')) {
+            // Show loading state
+            const cleanupButton = document.querySelector('button[onclick="cleanupOldLogs()"]');
+            const originalText = cleanupButton.innerHTML;
+            cleanupButton.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Cleaning...';
+            cleanupButton.disabled = true;
+            
+            // Create form and submit to cleanup old logs
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/api/logs/cleanup';
+            document.body.appendChild(form);
+            form.submit();
+        }
+    }
+
+    function clearLogs() {
+        if (confirm('Are you sure you want to clear ALL logs? This action cannot be undone.')) {
+            // Show loading state
+            const clearButton = document.querySelector('button[onclick="clearLogs()"]');
+            const originalText = clearButton.innerHTML;
+            clearButton.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Clearing...';
+            clearButton.disabled = true;
+            
+            // Create form and submit to clear all logs
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/api/logs/clear-all';
+            document.body.appendChild(form);
+            form.submit();
+        }
+    }
+
+    function getLogLevelBadgeClass(level) {
+        switch (level) {
+            case 'ERROR': return 'bg-danger';
+            case 'WARNING': return 'bg-warning';
+            case 'INFO': return 'bg-info';
+            case 'DEBUG': return 'bg-secondary';
+            default: return 'bg-secondary';
+        }
+    }
+
+    // Auto-refresh logs every 30 seconds
+    setInterval(refreshLogs, 30000);
+</script>
+{% endblock %}
