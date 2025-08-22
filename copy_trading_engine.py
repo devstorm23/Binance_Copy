@@ -1155,14 +1155,31 @@ class CopyTradingEngine:
                 )
                 logger.info(f"📊 Using balance-proportional sizing: {quantity}")
             
+            # Store the base quantity before scaling factors for comparison
+            base_quantity = quantity
+            
             # Apply copy percentage as final scaling factor
             quantity *= (config.copy_percentage / 100.0)
             logger.info(f"📊 After copy percentage {config.copy_percentage}%: {quantity}")
             
-            # Apply risk multiplier
+            # Apply risk multiplier with safety check
             if config.risk_multiplier != 1.0:
+                # SAFETY: Warn if risk multiplier is excessive
+                if config.risk_multiplier > 2.0:
+                    logger.warning(f"⚠️ High risk multiplier detected: {config.risk_multiplier}x - this will significantly increase position sizes!")
+                
                 quantity *= config.risk_multiplier
                 logger.info(f"📊 After risk multiplier {config.risk_multiplier}: {quantity}")
+            
+            # DIAGNOSTIC: Log the total scaling factor applied
+            total_scaling = quantity / base_quantity if base_quantity > 0 else 0
+            if total_scaling > 1.2:
+                logger.warning(f"🚨 POSITION SIZE WARNING: Total scaling factor {total_scaling:.3f}x may create oversized positions!")
+                logger.warning(f"   This is caused by copy_percentage={config.copy_percentage}% and risk_multiplier={config.risk_multiplier}x")
+            elif total_scaling < 0.8:
+                logger.warning(f"⚠️ Position scaling factor {total_scaling:.3f}x may create undersized positions")
+            
+            logger.info(f"📊 Total position scaling applied: {total_scaling:.3f}x")
             
             # Safety checks and limits  
             # Use master trade price for consistency with order execution
@@ -1180,6 +1197,23 @@ class CopyTradingEngine:
             # Calculate notional value for logging
             notional_value = quantity * mark_price
             risk_percentage_actual = (notional_value / follower_balance) * 100
+            
+            # FINAL DIAGNOSTIC: Compare with expected balance-proportional sizing
+            if master_balance > 0 and follower_balance > 0:
+                pure_balance_ratio = follower_balance / master_balance
+                expected_quantity = master_trade.quantity * pure_balance_ratio
+                actual_ratio = quantity / expected_quantity if expected_quantity > 0 else 0
+                
+                logger.info(f"📊 SIZING COMPARISON:")
+                logger.info(f"   Pure balance ratio: {pure_balance_ratio:.3f}")
+                logger.info(f"   Expected quantity (balance-proportional): {expected_quantity:.4f}")
+                logger.info(f"   Actual quantity: {quantity:.4f}")
+                logger.info(f"   Actual vs expected ratio: {actual_ratio:.3f}x")
+                
+                if actual_ratio > 1.15:
+                    logger.warning(f"🚨 OVERSIZED: Follower position is {actual_ratio:.2f}x larger than balance-proportional!")
+                elif actual_ratio < 0.85:
+                    logger.warning(f"⚠️ UNDERSIZED: Follower position is {actual_ratio:.2f}x smaller than balance-proportional")
             
             logger.info(f"📊 FINAL CALCULATION RESULT:")
             logger.info(f"   Quantity: {quantity}")
