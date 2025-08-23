@@ -1737,7 +1737,7 @@ class CopyTradingEngine:
             
             # STEP 0: DIRECT FOLLOWER POSITION CHECK (Most reliable method for delayed closing)
             # This is the PRIMARY method for detecting delayed position closing scenarios
-            logger.info(f"🔍 DELAYED CLOSING CHECK: Checking follower positions for potential closing...")
+            logger.debug("Checking follower positions for potential closing")
             
             # Get copy trading configurations
             configs = session.query(CopyTradingConfig).filter(
@@ -1932,9 +1932,7 @@ class CopyTradingEngine:
                             logger.info(f"🔄 QUANTITY MATCH CLOSING: Trade {trade.quantity} ≈ recent opposite {total_recent_opposite} (diff: {qty_ratio:.2%})")
                             return True
             
-            # STEP 5: ENHANCED TIME-BASED FALLBACK for delayed closing (5-10 minutes)
-            # This specifically addresses the delayed position closing issue
-            logger.info(f"🔍 DELAYED CLOSING FALLBACK: Enhanced time-based pattern detection...")
+            # STEP 5: STRICT time-based fallback (very conservative)
             
             if recent_opposite_trades:
                 # Get all opposite trades within the last 6 hours (more comprehensive)
@@ -1944,22 +1942,22 @@ class CopyTradingEngine:
                 logger.info(f"🕐 Time analysis: Most recent {opposite_side} trade was {time_diff} ago")
                 logger.info(f"📊 Trade comparison: {opposite_side} {most_recent_opposite.quantity} vs current {trade.side} {trade.quantity}")
                 
-                # EXTENDED TIME WINDOW for delayed closing detection (up to 6 hours)
-                if time_diff.total_seconds() < 21600:  # 6 hours (was 2 hours)
+                # STRICT TIME WINDOW for delayed closing detection (max 15 minutes)
+                if time_diff.total_seconds() <= 900:  # 15 minutes max
                     logger.info(f"🔄 DELAYED CLOSING ANALYSIS: {trade.side} order {time_diff} after {opposite_side} trade")
                     
                     # Check if this might be delayed closing in multiple scenarios:
                     
                     # Scenario 1: Exact or near-exact quantity match (high confidence)
                     qty_diff_ratio = abs(trade.quantity - most_recent_opposite.quantity) / most_recent_opposite.quantity
-                    if qty_diff_ratio < 0.2:  # Within 20% (more lenient)
+                    if qty_diff_ratio <= 0.05:  # Within 5% (strict)
                         logger.info(f"🎯 DELAYED CLOSING - QUANTITY MATCH: {trade.quantity} ≈ {most_recent_opposite.quantity} (diff: {qty_diff_ratio:.2%})")
                         return True
                     
                     # Scenario 2: Partial closing (much more conservative)
                     # Only consider partial closing if the trade is substantial (at least 75% of opposite trade)
                     # AND there's a clear pattern indicating position management
-                    if trade.quantity >= most_recent_opposite.quantity * 0.75:  # At least 75% (much more conservative)
+                    if trade.quantity >= most_recent_opposite.quantity * 0.9:  # At least 90% (very conservative)
                         logger.info(f"🔄 DELAYED CLOSING - SUBSTANTIAL PARTIAL: {trade.quantity} >= 75% of recent opposite trade {most_recent_opposite.quantity}")
                         
                         # Additional check: Only if time gap is short (5-15 minutes), suggesting intentional position management
@@ -1971,8 +1969,8 @@ class CopyTradingEngine:
                     
                     # Scenario 3: Very specific delayed closing (much more conservative)
                     # Only for exact or near-exact matches with longer delays
-                    if (600 <= time_diff.total_seconds() <= 1800 and  # Between 10-30 minutes only
-                        abs(trade.quantity - most_recent_opposite.quantity) / most_recent_opposite.quantity < 0.05):  # Within 5% match
+                    if (600 <= time_diff.total_seconds() <= 900 and  # Between 10-15 minutes only
+                        abs(trade.quantity - most_recent_opposite.quantity) / most_recent_opposite.quantity <= 0.03):  # Within 3% match
                         logger.info(f"⏰ PRECISE DELAYED CLOSING: {time_diff} gap with near-exact quantity match")
                         return True
                     else:
