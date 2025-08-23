@@ -1894,11 +1894,6 @@ class CopyTradingEngine:
                     return True
                 else:
                     logger.info(f"❌ NET POSITION CHECK PASSED: No opposite net position detected")
-                
-                # If we have more quantity in opposite direction, this trade is likely closing
-                if total_opposite_qty > total_same_qty:
-                    logger.info(f"🔄 Position closing heuristic: recent opposite trades {total_opposite_qty} > same side {total_same_qty}")
-                    return True
             
             # STEP 4: Enhanced quantity matching - only for legitimate closing scenarios
             # If we already determined this is same-direction (position building), skip quantity matching entirely
