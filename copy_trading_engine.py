@@ -747,9 +747,12 @@ class CopyTradingEngine:
             # Check if we've already processed this order
             if master_id not in self.processed_orders:
                 self.processed_orders[master_id] = set()
-                logger.debug(f"🆕 Initialized processed_orders for master {master_id}")
+                logger.info(f"🆕 Initialized processed_orders for master {master_id}")
             
+            logger.info(f"🔍 DUPLICATE CHECK: Checking if order {order_id} was already processed...")
+            logger.info(f"🔍 Current processed_orders for master {master_id}: {len(self.processed_orders[master_id])} orders")
             if order_id in self.processed_orders[master_id]:
+                logger.info(f"⏭️ Order {order_id} found in processed_orders cache - checking database...")
                 # Check if the order actually exists in the database with proper error handling
                 session_check = None
                 try:
@@ -784,7 +787,10 @@ class CopyTradingEngine:
                             session_check.close()
                         except Exception as cleanup_error:
                             logger.error(f"❌ Error closing database session: {cleanup_error}")
+            else:
+                logger.info(f"✅ FRESH ORDER: {order_id} not in processed_orders cache - proceeding with processing")
             
+            logger.info(f"🎯 TIME FILTERING COMPLETE: Order {order_id} ({order_status}) passed all checks - proceeding to processing")
             logger.info(f"📋 Processing NEW master order: {order['symbol']} {order['side']} {original_qty} - Status: {order_status}")
             logger.info(f"🚀 PROCEEDING TO DATABASE CREATION: Order {order_id} will be processed now")
             
