@@ -1843,12 +1843,24 @@ class CopyTradingEngine:
                 logger.info(f"📊 Found recent {opposite_side} trade: {most_recent_opposite.quantity} at {most_recent_opposite.created_at}")
                 logger.info(f"🕐 Time since opposite trade: {time_since_opposite}")
                 
-                # If there was a recent opposite trade and no same-side trades since then, this is likely closing
+                # CONSERVATIVE CHECK: Only consider this closing if it's very recent and quantity matches closely
                 same_side_after_opposite = [t for t in same_side_trades if t.created_at > most_recent_opposite.created_at]
                 
                 if len(same_side_after_opposite) == 0:
-                    logger.info(f"🔄 POSITION CLOSING DETECTED: {trade.side} order after recent {opposite_side} trade with no same-side trades in between")
-                    return True
+                    # Additional checks to prevent false positives:
+                    # 1. Time gap should be reasonable (not more than 30 minutes for normal position management)
+                    # 2. Quantity should be substantial relative to the opposite trade
+                    time_gap_minutes = time_since_opposite.total_seconds() / 60
+                    quantity_ratio = trade.quantity / most_recent_opposite.quantity
+                    
+                    logger.info(f"📊 SIMPLE CLOSING CHECK: Time gap: {time_gap_minutes:.1f}m, Quantity ratio: {quantity_ratio:.2f}")
+                    
+                    # Only consider it closing if it's recent AND substantial
+                    if time_gap_minutes <= 30 and quantity_ratio >= 0.5:
+                        logger.info(f"🔄 SIMPLE POSITION CLOSING: {trade.side} {trade.quantity} closes recent {opposite_side} {most_recent_opposite.quantity}")
+                        return True
+                    else:
+                        logger.info(f"❌ NOT SIMPLE CLOSING: Time gap {time_gap_minutes:.1f}m too long or quantity {quantity_ratio:.2f} too small")
                 
                 # Calculate running position to see if this trade closes it
                 net_position = 0
