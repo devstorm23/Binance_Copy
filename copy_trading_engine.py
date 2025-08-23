@@ -477,14 +477,21 @@ class CopyTradingEngine:
                             order_status = order.get('status', 'UNKNOWN')
                             order_time = datetime.utcfromtimestamp(order.get('time', order.get('updateTime', 0)) / 1000)
                             
-                            if order_status in ['NEW', 'PARTIALLY_FILLED']:
-                                logger.info(f"🚀 DETECTED NEW ORDER: {order['orderId']} ({order_status}) from {order_time} for master {master_id}")
-                            elif order_status == 'FILLED':
-                                logger.info(f"🏁 DETECTED FILLED ORDER: {order['orderId']} (FILLED) from {order_time} for master {master_id} - MARKET ORDER")
-                            
-                            logger.info(f"📝 About to process order {order['orderId']} (Status: {order_status}) for master {master_id}")
+                            # Only surface logs for orders that will pass startup/time filters
+                            if order_time >= self.server_start_time:
+                                if order_status in ['NEW', 'PARTIALLY_FILLED']:
+                                    logger.info(f"🚀 DETECTED NEW ORDER: {order['orderId']} ({order_status}) from {order_time} for master {master_id}")
+                                elif order_status == 'FILLED':
+                                    logger.info(f"🏁 DETECTED FILLED ORDER: {order['orderId']} (FILLED) from {order_time} for master {master_id} - MARKET ORDER")
+                                logger.info(f"📝 About to process order {order['orderId']} (Status: {order_status}) for master {master_id}")
+                            else:
+                                # Pre-start orders: keep logs at debug only
+                                logger.debug(f"Pre-start order {order['orderId']} ({order_status}) at {order_time} - will be ignored")
                             await self.process_master_order(master_id, order)
-                            logger.info(f"✅ Successfully processed order {order['orderId']} for master {master_id}")
+                            if order_time >= self.server_start_time:
+                                logger.info(f"✅ Successfully processed order {order['orderId']} for master {master_id}")
+                            else:
+                                logger.debug(f"Skipped pre-start order {order['orderId']}")
                         except Exception as order_error:
                             logger.error(f"❌ Error processing order {order['orderId']} for master {master_id}: {order_error}")
                             import traceback
