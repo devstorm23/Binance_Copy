@@ -686,9 +686,9 @@ class CopyTradingEngine:
             logger.info(f"🔍 Order details: ID={order_id}, ExecutedQty={executed_qty}, Type={order.get('type', 'UNKNOWN')}")
             
             # STARTUP PROTECTION: Skip orders from before server startup time
-            logger.info(f"🕐 Comparing order time {order_time} vs server start {self.server_start_time}")
+            logger.debug(f"Comparing order time {order_time} vs server start {self.server_start_time}")
             if order_time < self.server_start_time:
-                logger.info(f"🛡️ STARTUP PROTECTION: Skipping order {order_id} from {order_time} (before server start {self.server_start_time})")
+                logger.debug(f"Startup protection: skipping order {order_id} from {order_time} (before server start {self.server_start_time})")
                 return
             
             # AGGRESSIVE PROTECTION: Only process very recent orders
