@@ -1871,6 +1871,7 @@ class CopyTradingEngine:
                         net_position -= t.quantity
                 
                 logger.info(f"📊 Position analysis: Net={net_position}, Most recent opposite={most_recent_opposite.quantity}")
+                logger.info(f"🔍 DETAILED ANALYSIS: About to check position reduction logic...")
                 
                 # Enhanced closing detection: if current trade would significantly reduce the net position
                 if trade.side == 'SELL' and net_position > 0:
@@ -1884,12 +1885,15 @@ class CopyTradingEngine:
                         return True
                 
                 # ENHANCED HEURISTIC: If net position is opposite to current trade direction, it's likely closing
+                logger.info(f"🔍 NET POSITION HEURISTIC CHECK: Net={net_position}, Trade={trade.side} {trade.quantity}")
                 if net_position > 0 and trade.side == 'SELL':
-                    logger.info(f"🔄 POSITION CLOSING: Net LONG position {net_position}, SELL order {trade.quantity}")
+                    logger.info(f"🔄 NET POSITION CLOSING: Net LONG position {net_position}, SELL order {trade.quantity}")
                     return True
                 elif net_position < 0 and trade.side == 'BUY':
-                    logger.info(f"🔄 POSITION CLOSING: Net SHORT position {abs(net_position)}, BUY order {trade.quantity}")
+                    logger.info(f"🔄 NET POSITION CLOSING: Net SHORT position {abs(net_position)}, BUY order {trade.quantity}")
                     return True
+                else:
+                    logger.info(f"❌ NET POSITION CHECK PASSED: No opposite net position detected")
                 
                 # If we have more quantity in opposite direction, this trade is likely closing
                 if total_opposite_qty > total_same_qty:
