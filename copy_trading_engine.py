@@ -1781,10 +1781,10 @@ class CopyTradingEngine:
             
             if has_follower_positions_to_close:
                 logger.info(f"🎯 DELAYED CLOSING CONFIRMED: Master {trade.side} order will close existing follower positions")
-                logger.info(f"   This handles delayed position closing scenarios (5+ minutes after opening)")
                 return True
             else:
-                logger.info(f"ℹ️ NO CLOSING NEEDED: No opposite follower positions found to close")
+                # If no opposite follower positions exist, treat as NEW trade immediately
+                return False
             
             # STEP 1: Check current positions from Binance API
             positions = []
