@@ -1945,34 +1945,31 @@ class CopyTradingEngine:
                         logger.info(f"🎯 DELAYED CLOSING - QUANTITY MATCH: {trade.quantity} ≈ {most_recent_opposite.quantity} (diff: {qty_diff_ratio:.2%})")
                         return True
                     
-                    # Scenario 2: Partial closing (common in delayed scenarios)
-                    if trade.quantity >= most_recent_opposite.quantity * 0.25:  # At least 25% (more lenient)
-                        logger.info(f"🔄 DELAYED CLOSING - PARTIAL: {trade.quantity} >= 25% of recent opposite trade {most_recent_opposite.quantity}")
+                    # Scenario 2: Partial closing (much more conservative)
+                    # Only consider partial closing if the trade is substantial (at least 75% of opposite trade)
+                    # AND there's a clear pattern indicating position management
+                    if trade.quantity >= most_recent_opposite.quantity * 0.75:  # At least 75% (much more conservative)
+                        logger.info(f"🔄 DELAYED CLOSING - SUBSTANTIAL PARTIAL: {trade.quantity} >= 75% of recent opposite trade {most_recent_opposite.quantity}")
                         
-                        # Additional check: If time gap is significant (5+ minutes), be more aggressive
-                        if time_diff.total_seconds() >= 300:  # 5 minutes or more
-                            logger.info(f"⏰ LONG DELAY DETECTED: {time_diff} gap suggests delayed position closing")
+                        # Additional check: Only if time gap is short (5-15 minutes), suggesting intentional position management
+                        if 300 <= time_diff.total_seconds() <= 900:  # Between 5-15 minutes only
+                            logger.info(f"⏰ MODERATE DELAY DETECTED: {time_diff} gap suggests intentional delayed position closing")
                             return True
+                        else:
+                            logger.info(f"❌ TIME GAP TOO LONG: {time_diff} suggests independent trade, not position closing")
                     
-                    # Scenario 3: Any reasonable quantity with significant time gap
-                    if (time_diff.total_seconds() >= 600 and  # 10+ minutes
-                        trade.quantity >= most_recent_opposite.quantity * 0.1):  # At least 10%
-                        logger.info(f"⏰ VERY LONG DELAY: {time_diff} gap with {trade.quantity} suggests delayed closing")
+                    # Scenario 3: Very specific delayed closing (much more conservative)
+                    # Only for exact or near-exact matches with longer delays
+                    if (600 <= time_diff.total_seconds() <= 1800 and  # Between 10-30 minutes only
+                        abs(trade.quantity - most_recent_opposite.quantity) / most_recent_opposite.quantity < 0.05):  # Within 5% match
+                        logger.info(f"⏰ PRECISE DELAYED CLOSING: {time_diff} gap with near-exact quantity match")
                         return True
+                    else:
+                        logger.info(f"❌ NO DELAYED CLOSING PATTERN: Time {time_diff}, quantity difference too large or time too long")
                 
-                # FALLBACK: Check for any opposite trades in the last 24 hours for very delayed closing
-                very_old_opposite = [t for t in recent_trades if t.side == opposite_side and 
-                                   (datetime.utcnow() - t.created_at).total_seconds() < 86400]  # 24 hours
-                
-                if very_old_opposite and not recent_opposite_trades:
-                    logger.info(f"🔍 VERY DELAYED SCENARIO: Found old {opposite_side} trades but no recent ones")
-                    # If there are old opposite trades but current trade is opposite direction,
-                    # this might be a very delayed closing
-                    oldest_opposite = very_old_opposite[0]
-                    very_long_gap = datetime.utcnow() - oldest_opposite.created_at
-                    if very_long_gap.total_seconds() >= 1800:  # 30+ minutes
-                        logger.info(f"⏰ VERY DELAYED CLOSING: {very_long_gap} after {opposite_side} trade")
-                        return True
+                # REMOVED: 24-hour fallback was too aggressive and caused false positives
+                # Most legitimate new trades were being incorrectly classified as position closing
+                logger.info(f"❌ NO 24H FALLBACK: Removed overly aggressive 24-hour delayed closing detection")
             
             logger.info(f"📈 FINAL DETERMINATION: Regular trade order (not position closing)")
             return False
