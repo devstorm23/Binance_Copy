@@ -1381,11 +1381,16 @@ class CopyTradingEngine:
                 # Calculate balance ratio using stored balances
                 balance_ratio = follower_account.balance / master_account.balance
                 
-                master_notional = master_trade.quantity * mark_price
-                
-                # Scale proportionally based on balance ratio
-                follower_notional = master_notional * balance_ratio
-                fallback_quantity = follower_notional / mark_price
+                # Use master trade price if available for proportional notional calculation
+                price_for_calc = master_trade.price if master_trade.price and master_trade.price > 0 else None
+                if price_for_calc:
+                    master_notional = master_trade.quantity * price_for_calc
+                    # Scale proportionally based on balance ratio
+                    follower_notional = master_notional * balance_ratio
+                    fallback_quantity = follower_notional / price_for_calc
+                else:
+                    # If price is not available, fall back to quantity-based scaling before applying copy%
+                    fallback_quantity = master_trade.quantity
                 
                 # Apply copy percentage and safety reduction
                 fallback_quantity *= (config.copy_percentage / 100.0) * 0.8  # 20% safety reduction
@@ -1395,7 +1400,8 @@ class CopyTradingEngine:
                 logger.warning(f"   Master balance (stored): ${master_account.balance:.2f}")
                 logger.warning(f"   Follower balance (stored): ${follower_account.balance:.2f}")
                 logger.warning(f"   Balance ratio: {balance_ratio:.4f}")
-                logger.warning(f"   Master notional: ${master_notional:.2f}")
+                if price_for_calc:
+                    logger.warning(f"   Master notional: ${master_trade.quantity * price_for_calc:.2f}")
                 logger.warning(f"   Copy%: {config.copy_percentage}%, Safety reduction: 20%")
                 
                 return fallback_quantity
