@@ -1560,69 +1560,101 @@ class CopyTradingEngine:
             if notional_value > 0:
                 logger.info(f"💰 Order notional value: ${notional_value:.2f}")
             
-            # Place the order based on order type
+            # Place the order based on order type with adaptive retry on insufficient margin
             logger.info(f"🔄 Attempting to place {master_trade.order_type} order...")
             order = None
+            max_retries = 3
+            retry_count = 0
+            current_quantity = quantity
+            binance_min_notional = 5.0
             
-            try:
-                if master_trade.order_type == "MARKET":
-                    logger.info(f"📊 Placing MARKET order: {master_trade.symbol} {master_trade.side} {quantity}")
-                    order = await follower_client.place_market_order(
-                        master_trade.symbol,
-                        master_trade.side,
-                        quantity
-                    )
-                elif master_trade.order_type == "LIMIT":
-                    # Validate price for LIMIT orders
-                    if not master_trade.price or master_trade.price <= 0:
-                        logger.error(f"❌ Invalid price for LIMIT order: {master_trade.price}")
-                        logger.error(f"❌ LIMIT orders require a valid positive price")
+            while True:
+                try:
+                    if master_trade.order_type == "MARKET":
+                        logger.info(f"📊 Placing MARKET order: {master_trade.symbol} {master_trade.side} {current_quantity}")
+                        order = await follower_client.place_market_order(
+                            master_trade.symbol,
+                            master_trade.side,
+                            current_quantity
+                        )
+                    elif master_trade.order_type == "LIMIT":
+                        # Validate price for LIMIT orders
+                        if not master_trade.price or master_trade.price <= 0:
+                            logger.error(f"❌ Invalid price for LIMIT order: {master_trade.price}")
+                            logger.error(f"❌ LIMIT orders require a valid positive price")
+                            return False
+                        
+                        logger.info(f"📊 Placing LIMIT order: {master_trade.symbol} {master_trade.side} {current_quantity} @ {master_trade.price}")
+                        order = await follower_client.place_limit_order(
+                            master_trade.symbol,
+                            master_trade.side,
+                            current_quantity,
+                            master_trade.price
+                        )
+                    elif master_trade.order_type == "STOP_MARKET":
+                        logger.info(f"📊 Placing STOP_MARKET order: {master_trade.symbol} {master_trade.side} {current_quantity} @ {master_trade.stop_price}")
+                        order = await follower_client.place_stop_market_order(
+                            master_trade.symbol,
+                            master_trade.side,
+                            current_quantity,
+                            master_trade.stop_price
+                        )
+                    elif master_trade.order_type == "TAKE_PROFIT_MARKET":
+                        logger.info(f"📊 Placing TAKE_PROFIT_MARKET order: {master_trade.symbol} {master_trade.side} {current_quantity} @ {master_trade.take_profit_price}")
+                        order = await follower_client.place_take_profit_market_order(
+                            master_trade.symbol,
+                            master_trade.side,
+                            current_quantity,
+                            master_trade.take_profit_price
+                        )
+                    else:
+                        logger.warning(f"❌ Unsupported order type: {master_trade.order_type}")
                         return False
                     
-                    logger.info(f"📊 Placing LIMIT order: {master_trade.symbol} {master_trade.side} {quantity} @ {master_trade.price}")
-                    order = await follower_client.place_limit_order(
-                        master_trade.symbol,
-                        master_trade.side,
-                        quantity,
-                        master_trade.price
-                    )
-                elif master_trade.order_type == "STOP_MARKET":
-                    logger.info(f"📊 Placing STOP_MARKET order: {master_trade.symbol} {master_trade.side} {quantity} @ {master_trade.stop_price}")
-                    order = await follower_client.place_stop_market_order(
-                        master_trade.symbol,
-                        master_trade.side,
-                        quantity,
-                        master_trade.stop_price
-                    )
-                elif master_trade.order_type == "TAKE_PROFIT_MARKET":
-                    logger.info(f"📊 Placing TAKE_PROFIT_MARKET order: {master_trade.symbol} {master_trade.side} {quantity} @ {master_trade.take_profit_price}")
-                    order = await follower_client.place_take_profit_market_order(
-                        master_trade.symbol,
-                        master_trade.side,
-                        quantity,
-                        master_trade.take_profit_price
-                    )
-                else:
-                    logger.warning(f"❌ Unsupported order type: {master_trade.order_type}")
-                    return False
-                
-                if order:
-                    logger.info(f"✅ Follower order placed successfully!")
-                    logger.info(f"📋 Order details: Order ID {order.get('orderId', 'Unknown')}")
-                    logger.info(f"📋 Order status: {order.get('status', 'Unknown')}")
-                    logger.info(f"📋 Full order response: {order}")
-                else:
-                    logger.error(f"❌ Order placement returned None - this should not happen!")
-                    return False
+                    if order:
+                        if current_quantity != quantity:
+                            logger.info(f"✅ Order placed after downsizing due to margin: {quantity} -> {current_quantity}")
+                        # Persist the actually placed quantity
+                        quantity = current_quantity
+                        logger.info(f"✅ Follower order placed successfully!")
+                        logger.info(f"📋 Order details: Order ID {order.get('orderId', 'Unknown')}")
+                        logger.info(f"📋 Order status: {order.get('status', 'Unknown')}")
+                        logger.info(f"📋 Full order response: {order}")
+                        break
+                    else:
+                        logger.error(f"❌ Order placement returned None - this should not happen!")
+                        return False
                     
-            except Exception as order_error:
-                logger.error(f"❌ CRITICAL: Order placement failed with exception: {order_error}")
-                logger.error(f"❌ Order type: {master_trade.order_type}")
-                logger.error(f"❌ Symbol: {master_trade.symbol}")
-                logger.error(f"❌ Side: {master_trade.side}")
-                logger.error(f"❌ Quantity: {quantity}")
-                logger.error(f"❌ Price: {master_trade.price}")
-                raise order_error  # Re-raise to be caught by outer exception handler
+                except Exception as order_error:
+                    error_text = str(order_error)
+                    # Handle insufficient margin: reduce quantity and retry while respecting Binance minimum notional
+                    if ("code=-2019" in error_text) or ("Margin is insufficient" in error_text):
+                        if retry_count >= max_retries:
+                            logger.error("❌ Margin insufficient after retries - giving up")
+                            return False
+                        # Reduce quantity by half conservatively
+                        proposed_qty = current_quantity * 0.5
+                        # Ensure we don't go below Binance min notional
+                        if master_trade.price and (proposed_qty * master_trade.price) < binance_min_notional:
+                            logger.warning(f"⚠️ Cannot reduce quantity below Binance $5 minimum notional. Current attempt would be ${proposed_qty * master_trade.price:.2f}")
+                            return False
+                        try:
+                            proposed_qty = await follower_client.adjust_quantity_precision(master_trade.symbol, proposed_qty)
+                        except Exception as precision_e:
+                            logger.warning(f"⚠️ Failed to adjust precision during retry: {precision_e}")
+                            proposed_qty = round(proposed_qty, 1)
+                        logger.warning(f"⚠️ Reducing quantity due to insufficient margin: {current_quantity} -> {proposed_qty}")
+                        current_quantity = proposed_qty
+                        retry_count += 1
+                        continue
+                    else:
+                        logger.error(f"❌ CRITICAL: Order placement failed with exception: {order_error}")
+                        logger.error(f"❌ Order type: {master_trade.order_type}")
+                        logger.error(f"❌ Symbol: {master_trade.symbol}")
+                        logger.error(f"❌ Side: {master_trade.side}")
+                        logger.error(f"❌ Quantity: {current_quantity}")
+                        logger.error(f"❌ Price: {master_trade.price}")
+                        raise order_error  # Re-raise to be caught by outer exception handler
             
             # Save follower trade to database
             follower_trade = Trade(
