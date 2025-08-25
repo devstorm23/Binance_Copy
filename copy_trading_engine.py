@@ -1567,6 +1567,13 @@ class CopyTradingEngine:
             retry_count = 0
             current_quantity = quantity
             binance_min_notional = 5.0
+            # Prepare leverage escalation steps to help pass margin checks on sub-funded accounts
+            try:
+                current_leverage = int(getattr(follower_account, 'leverage', 10) or 10)
+            except Exception:
+                current_leverage = 10
+            leverage_steps = [20, 50, 75, 100, 125]
+            attempted_leverages = set([current_leverage])
             
             while True:
                 try:
@@ -1629,6 +1636,25 @@ class CopyTradingEngine:
                     error_text = str(order_error)
                     # Handle insufficient margin: reduce quantity and retry while respecting Binance minimum notional
                     if ("code=-2019" in error_text) or ("Margin is insufficient" in error_text):
+                        # First, try escalating leverage if possible and not yet attempted
+                        next_leverage = None
+                        for lvl in leverage_steps:
+                            if lvl > current_leverage and lvl not in attempted_leverages:
+                                next_leverage = lvl
+                                break
+                        if next_leverage is not None:
+                            try:
+                                await follower_client.set_leverage(master_trade.symbol, next_leverage)
+                                logger.warning(f"⚠️ Increased leverage to {next_leverage}x to address margin insufficiency")
+                                attempted_leverages.add(next_leverage)
+                                current_leverage = next_leverage
+                                # Retry immediately with same quantity at higher leverage
+                                continue
+                            except Exception as lev_e:
+                                logger.warning(f"⚠️ Failed to increase leverage to {next_leverage}x: {lev_e}")
+                                attempted_leverages.add(next_leverage)
+                                # Fall through to quantity reduction
+                        
                         if retry_count >= max_retries:
                             logger.error("❌ Margin insufficient after retries - giving up")
                             return False
