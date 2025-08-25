@@ -239,10 +239,17 @@ class BinanceClient:
         try:
             import asyncio
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, lambda: self.client.futures_change_position_mode(dualSidePosition=dual_side_position))
+            # Add timeout to avoid hanging on Binance API
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: self.client.futures_change_position_mode(dualSidePosition=dual_side_position)),
+                timeout=5
+            )
             mode = "Hedge" if dual_side_position else "One-way"
             logger.info(f"Position mode set to {mode}")
             return True
+        except asyncio.TimeoutError:
+            logger.warning("Timed out while setting position mode; proceeding without change")
+            return False
         except Exception as e:
             logger.warning(f"Failed to set position mode: {e}")
             # This might fail if position mode is already set or account has open positions
@@ -253,11 +260,18 @@ class BinanceClient:
         try:
             import asyncio
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, self.client.futures_get_position_mode)
+            # Add timeout to avoid hanging on Binance API
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, self.client.futures_get_position_mode),
+                timeout=5
+            )
             dual_side = result.get('dualSidePosition', False)
             mode = "Hedge" if dual_side else "One-way"
             logger.info(f"Current position mode: {mode}")
             return dual_side
+        except asyncio.TimeoutError:
+            logger.warning("Timed out while fetching position mode; assuming One-way mode")
+            return False  # Default to One-way mode on timeout
         except Exception as e:
             logger.warning(f"Failed to get position mode: {e}")
             return False  # Default to One-way mode
@@ -293,7 +307,10 @@ class BinanceClient:
             
             # Place the order
             logger.info(f"🚀 Executing futures_create_order...")
-            order = await loop.run_in_executor(None, lambda: self.client.futures_create_order(**order_params))
+            order = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: self.client.futures_create_order(**order_params)),
+                timeout=8
+            )
             
             if order:
                 logger.info(f"✅ Market order placed successfully: {symbol} {side} {quantity}")
@@ -303,6 +320,9 @@ class BinanceClient:
                 logger.error(f"❌ Order placement returned None response!")
                 raise Exception("Order placement returned None")
                 
+        except asyncio.TimeoutError:
+            logger.error("❌ Timed out placing market order")
+            raise
         except BinanceAPIException as e:
             logger.error(f"❌ Binance API Exception: {e}")
             logger.error(f"❌ Error code: {e.code}")
@@ -351,7 +371,10 @@ class BinanceClient:
             
             # Place the order
             logger.info(f"🚀 Executing futures_create_order...")
-            order = await loop.run_in_executor(None, lambda: self.client.futures_create_order(**order_params))
+            order = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: self.client.futures_create_order(**order_params)),
+                timeout=8
+            )
             
             if order:
                 logger.info(f"✅ Limit order placed successfully: {symbol} {side} {quantity} @ {price}")
@@ -361,6 +384,9 @@ class BinanceClient:
                 logger.error(f"❌ Order placement returned None response!")
                 raise Exception("Order placement returned None")
                 
+        except asyncio.TimeoutError:
+            logger.error("❌ Timed out placing limit order")
+            raise
         except BinanceAPIException as e:
             logger.error(f"❌ Binance API Exception: {e}")
             logger.error(f"❌ Error code: {e.code}")
@@ -402,7 +428,10 @@ class BinanceClient:
             else:
                 logger.info("One-way mode detected - no positionSide needed")
             
-            order = await loop.run_in_executor(None, lambda: self.client.futures_create_order(**order_params))
+            order = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: self.client.futures_create_order(**order_params)),
+                timeout=8
+            )
             logger.info(f"Stop market order placed: {symbol} {side} {quantity} @ {stop_price}")
             return order
         except BinanceOrderException as e:
@@ -438,7 +467,10 @@ class BinanceClient:
             else:
                 logger.info("One-way mode detected - no positionSide needed")
             
-            order = await loop.run_in_executor(None, lambda: self.client.futures_create_order(**order_params))
+            order = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: self.client.futures_create_order(**order_params)),
+                timeout=8
+            )
             logger.info(f"Take profit market order placed: {symbol} {side} {quantity} @ {stop_price}")
             return order
         except BinanceOrderException as e:
@@ -550,7 +582,12 @@ class BinanceClient:
     async def get_order_status(self, symbol: str, order_id: str) -> Dict:
         """Get order status"""
         try:
-            order = self.client.futures_get_order(symbol=symbol, orderId=order_id)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            order = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: self.client.futures_get_order(symbol=symbol, orderId=order_id)),
+                timeout=5
+            )
             return order
         except Exception as e:
             logger.error(f"Failed to get order status: {e}")
@@ -559,7 +596,12 @@ class BinanceClient:
     async def get_symbol_info(self, symbol: str) -> Dict:
         """Get symbol information"""
         try:
-            info = self.client.futures_exchange_info()
+            import asyncio
+            loop = asyncio.get_event_loop()
+            info = await asyncio.wait_for(
+                loop.run_in_executor(None, self.client.futures_exchange_info),
+                timeout=8
+            )
             for symbol_info in info['symbols']:
                 if symbol_info['symbol'] == symbol:
                     return symbol_info
@@ -571,7 +613,12 @@ class BinanceClient:
     async def get_mark_price(self, symbol: str) -> float:
         """Get current mark price"""
         try:
-            price = self.client.futures_mark_price(symbol=symbol)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            price = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: self.client.futures_mark_price(symbol=symbol)),
+                timeout=5
+            )
             return float(price['markPrice'])
         except Exception as e:
             logger.error(f"Failed to get mark price: {e}")
