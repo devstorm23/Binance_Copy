@@ -563,11 +563,11 @@ class CopyTradingEngine:
             # 2. Get recent historical orders - STARTUP PROTECTION to prevent processing old orders
             try:
                 # During startup, never look back further than server start time
-                # After startup, limit to 10 minutes to avoid processing old cancelled orders
+                # After startup, limit to 30 minutes to avoid missing delayed fills/closures
                 server_start_time_ms = int(self.server_start_time.timestamp() * 1000)
-                ten_minutes_ago = int((datetime.utcnow() - timedelta(minutes=10)).timestamp() * 1000)
-                # Use the latest of: requested start time, 10 minutes ago, or server start time
-                effective_start_time = max(start_time, ten_minutes_ago, server_start_time_ms)
+                thirty_minutes_ago = int((datetime.utcnow() - timedelta(minutes=30)).timestamp() * 1000)
+                # Use the latest of: requested start time, 30 minutes ago, or server start time
+                effective_start_time = max(start_time, thirty_minutes_ago, server_start_time_ms)
                 
                 historical_orders = await loop.run_in_executor(
                     None, 
@@ -601,17 +601,18 @@ class CopyTradingEngine:
                 
                 # STRICT FILTERING: Only process orders that are:
                 # 1. Open orders (NEW/PARTIALLY_FILLED) - regardless of time
-                # 2. Recent filled orders (within last 10 minutes) - market orders are processed immediately
+                # 2. Recent filled orders (within last 30 minutes) - market orders are processed immediately
                 # 3. Very recent cancelled orders (within last 5 minutes) - but NEVER from before server startup
                 is_open_order = order_status in ['NEW', 'PARTIALLY_FILLED']
                 five_minutes_ago = int((datetime.utcnow() - timedelta(minutes=5)).timestamp() * 1000)
-                ten_minutes_ago = int((datetime.utcnow() - timedelta(minutes=10)).timestamp() * 1000)
+                thirty_minutes_ago = int((datetime.utcnow() - timedelta(minutes=30)).timestamp() * 1000)
                 server_start_time_ms = int(self.server_start_time.timestamp() * 1000)
-                is_recently_filled = order_status == 'FILLED' and order_time >= ten_minutes_ago
+                update_time_ms = int(order.get('updateTime', order_time))
+                is_recently_filled = order_status == 'FILLED' and update_time_ms >= thirty_minutes_ago
                 # For cancelled orders, they must be both recent AND after server startup
                 is_recently_cancelled = (order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED'] and 
-                                       order_time >= five_minutes_ago and 
-                                       order_time >= server_start_time_ms)
+                                       update_time_ms >= five_minutes_ago and 
+                                       update_time_ms >= server_start_time_ms)
                 
                 # Debug logging for cancelled orders that are being filtered out
                 if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']:
@@ -1868,9 +1869,7 @@ class CopyTradingEngine:
             if has_follower_positions_to_close:
                 logger.info(f"🎯 DELAYED CLOSING CONFIRMED: Master {trade.side} order will close existing follower positions")
                 return True
-            else:
-                # If no opposite follower positions exist, treat as NEW trade immediately
-                return False
+            # Continue with master-side position/history analysis before deciding it's not closing
             
             # STEP 1: Check current positions from Binance API
             positions = []
@@ -2132,14 +2131,8 @@ class CopyTradingEngine:
                                 logger.info(f"ℹ️ No match: Master {master_trade.side} vs follower {pos['side']} position")
                     
                     if position_to_close:
-                        # Calculate quantity to close (proportional to copy percentage)
-                        raw_close_quantity = position_to_close['size'] * (config.copy_percentage / 100.0)
-                        
-                        # Ensure minimum quantity and precision
-                        close_quantity = max(0.001, round(raw_close_quantity, 8))  # Minimum 0.001 with 8 decimal precision
-                        
-                        # Don't close more than the position size
-                        close_quantity = min(close_quantity, position_to_close['size'])
+                        # Close the entire follower position when master closes
+                        close_quantity = max(0.001, round(float(position_to_close['size']), 8))
                         
                         logger.info(f"🔄 CLOSING follower position: Account={config.follower_account_id}, Symbol={master_trade.symbol}, Side={position_to_close['side']}, CloseQty={close_quantity}, PositionSize={position_to_close['size']}")
                         
