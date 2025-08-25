@@ -221,6 +221,40 @@ class BinanceClient:
         except Exception as e:
             logger.warning(f"Failed to get balance (possibly limited permissions): {e}")
             return 0.0
+
+    async def get_total_wallet_balance(self) -> float:
+        """Get total wallet balance (Futures USD-M). Prefer for display as 'account balance'."""
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            account = await loop.run_in_executor(None, self.client.futures_account)
+            return float(account.get('totalWalletBalance', 0.0))
+        except BinanceAPIException as e:
+            if e.code == -2015:
+                logger.warning("⚠️ Wallet balance access denied (-2015) - limited permissions")
+                return 0.0
+            logger.error(f"Failed to get total wallet balance: {e}")
+            return 0.0
+        except Exception as e:
+            logger.warning(f"Failed to get total wallet balance (possibly limited permissions): {e}")
+            return 0.0
+
+    async def get_total_margin_balance(self) -> float:
+        """Get total margin balance (wallet + unrealized PnL). Useful for risk/equity."""
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            account = await loop.run_in_executor(None, self.client.futures_account)
+            return float(account.get('totalMarginBalance', 0.0))
+        except BinanceAPIException as e:
+            if e.code == -2015:
+                logger.warning("⚠️ Margin balance access denied (-2015) - limited permissions")
+                return 0.0
+            logger.error(f"Failed to get total margin balance: {e}")
+            return 0.0
+        except Exception as e:
+            logger.warning(f"Failed to get total margin balance (possibly limited permissions): {e}")
+            return 0.0
     
     async def set_leverage(self, symbol: str, leverage: int) -> bool:
         """Set leverage for a symbol"""

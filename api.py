@@ -155,22 +155,44 @@ async def create_account(account: AccountCreate, db = Depends(get_db)):
 
 @app.get("/accounts", response_model=List[Dict])
 async def get_accounts(db = Depends(get_db)):
-    """Get all accounts"""
+    """Get all accounts with live wallet balance when available"""
     try:
         accounts = db.query(Account).all()
-        return [
-            {
+
+        async def fetch_wallet_balance(acc: Account) -> float:
+            try:
+                client = BinanceClient(
+                    api_key=acc.api_key,
+                    secret_key=acc.secret_key,
+                    testnet=Config.BINANCE_TESTNET
+                )
+                wallet = await client.get_total_wallet_balance()
+                # Fallback to available balance if wallet is zero (limited permissions)
+                if wallet <= 0:
+                    available = await client.get_balance()
+                    return available if available > 0 else acc.balance
+                return wallet
+            except Exception as e:
+                logger.warning(f"Failed to fetch live balance for account {acc.id}: {e}")
+                return acc.balance
+
+        # Fetch balances concurrently
+        live_balances = await asyncio.gather(*[fetch_wallet_balance(acc) for acc in accounts])
+
+        result = []
+        for acc, live_balance in zip(accounts, live_balances):
+            result.append({
                 "id": acc.id,
                 "name": acc.name,
                 "is_master": acc.is_master,
                 "is_active": acc.is_active,
                 "leverage": acc.leverage,
                 "risk_percentage": acc.risk_percentage,
-                "balance": acc.balance,
+                "balance": live_balance,
                 "created_at": acc.created_at
-            }
-            for acc in accounts
-        ]
+            })
+
+        return result
     except Exception as e:
         logger.error(f"Error getting accounts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -775,8 +797,9 @@ async def get_account_risk_analysis(account_id: int, db = Depends(get_db)):
         if not client:
             raise HTTPException(status_code=400, detail="Account client not available")
         
-        # Get balance and positions
-        balance = await client.get_balance()
+        # Get equity (margin balance) and positions
+        # Use margin balance to reflect wallet + unrealized PnL (equity)
+        balance = await client.get_total_margin_balance()
         positions = await client.get_positions()
         
         # Calculate portfolio metrics
@@ -786,7 +809,7 @@ async def get_account_risk_analysis(account_id: int, db = Depends(get_db)):
         for position in positions:
             if position.get('size', 0) != 0:
                 size = float(position.get('size', 0))
-                mark_price = float(position.get('markPrice', 0))
+                mark_price = float(position.get('mark_price', 0) or position.get('markPrice', 0))
                 position_value = abs(size) * mark_price
                 total_position_value += position_value
                 
@@ -796,7 +819,7 @@ async def get_account_risk_analysis(account_id: int, db = Depends(get_db)):
                     "size": size,
                     "mark_price": mark_price,
                     "position_value": position_value,
-                    "unrealized_pnl": float(position.get('unrealizedProfit', 0))
+                    "unrealized_pnl": float(position.get('unrealized_pnl', position.get('unrealizedProfit', 0)))
                 })
         
         portfolio_risk = (total_position_value / balance) * 100 if balance > 0 else 0

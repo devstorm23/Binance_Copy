@@ -1100,8 +1100,8 @@ class CopyTradingEngine:
                 logger.error(f"❌ Master account {master_trade.account_id} not found in database")
                 return 0
             
-            # Get current account balances
-            follower_balance = await follower_client.get_balance()
+            # Get current account balances (use wallet balance for proportional sizing)
+            follower_balance = await follower_client.get_total_wallet_balance()
             if follower_balance <= 0:
                 logger.warning(f"⚠️ Could not get follower balance or balance is zero: {follower_balance}")
                 logger.warning(f"⚠️ Falling back to stored balance calculation for proportional copying")
@@ -1112,7 +1112,7 @@ class CopyTradingEngine:
             master_client = self.master_clients.get(master_trade.account_id)
             if master_client:
                 try:
-                    master_balance = await master_client.get_balance()
+                    master_balance = await master_client.get_total_wallet_balance()
                     logger.info(f"📊 Got live master balance: ${master_balance:.2f}")
                     
                     # Update stored balance if it's significantly different
