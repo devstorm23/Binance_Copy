@@ -40,6 +40,7 @@ class Config:
     # Trading settings
     MIN_ORDER_SIZE = float(os.getenv("MIN_ORDER_SIZE", "10.0"))
     MAX_ORDER_SIZE = float(os.getenv("MAX_ORDER_SIZE", "10000.0"))
+    DEFAULT_TRADE_MARGIN_PERCENTAGE = float(os.getenv("DEFAULT_TRADE_MARGIN_PERCENTAGE", "1.8"))
     
     # Logging
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

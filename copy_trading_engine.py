@@ -1319,6 +1319,21 @@ class CopyTradingEngine:
             
             logger.info(f"📊 Safety limits check at price ${trade_price:.4f}:")
             
+            # 0. Enforce target margin ratio cap (Config.DEFAULT_TRADE_MARGIN_PERCENTAGE)
+            # Margin ratio here is treated as position notional / equity in percent
+            try:
+                target_margin_pct = float(getattr(Config, 'DEFAULT_TRADE_MARGIN_PERCENTAGE', 1.8))
+            except Exception:
+                target_margin_pct = 1.8
+            if follower_balance > 0 and risk_percentage > target_margin_pct:
+                max_notional_by_margin = follower_balance * (target_margin_pct / 100.0)
+                capped_quantity = max_notional_by_margin / trade_price
+                if capped_quantity < quantity:
+                    logger.warning(f"⚠️ Quantity reduced by margin cap {target_margin_pct}%: {quantity:.6f} -> {capped_quantity:.6f}")
+                    quantity = capped_quantity
+                    position_value = quantity * trade_price
+                    risk_percentage = (position_value / follower_balance) * 100
+
             # 1. Maximum leverage check: prevent over-leveraging (most critical safety check)
             effective_leverage = position_value / follower_balance if follower_balance > 0 else 0
             max_allowed_leverage = follower_account.leverage * 0.9  # Use 90% of max leverage for safety
