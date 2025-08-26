@@ -687,6 +687,55 @@ class CopyTradingEngine:
             if order_status in ['NEW', 'FILLED']:
                 logger.info(f"🚀 PROCESSING {order_status} ORDER: About to copy {order_status.lower()} order to followers")
                 
+                # COMPREHENSIVE DUPLICATE CHECK for both NEW and FILLED orders
+                logger.info(f"🔍 Checking for duplicates of Binance order {order['orderId']} ({order['symbol']} {order['side']})")
+                
+                # Method 1: Check for recent follower trades with matching symbol/side
+                existing_copy = session.query(Trade).filter(
+                    Trade.account_id.in_(
+                        session.query(CopyTradingConfig.follower_account_id).filter(
+                            CopyTradingConfig.master_account_id == master_id,
+                            CopyTradingConfig.is_active == True
+                        )
+                    ),
+                    Trade.symbol == order['symbol'],
+                    Trade.side == order['side'],
+                    Trade.copied_from_master == True,
+                    Trade.created_at >= datetime.utcnow() - timedelta(minutes=30)  # Recent trades only
+                ).first()
+                
+                # Method 2: Check for master trades with same binance_order_id that were already copied
+                existing_master_copy = session.query(Trade).filter(
+                    Trade.account_id == master_id,
+                    Trade.binance_order_id == str(order['orderId']),
+                    Trade.copied_from_master == True
+                ).first()
+                
+                # Method 3: Check for any master trade with this binance_order_id that has follower trades
+                existing_related_master = session.query(Trade).filter(
+                    Trade.account_id == master_id,
+                    Trade.binance_order_id == str(order['orderId']),
+                    Trade.id != db_trade.id  # Exclude current trade
+                ).first()
+                
+                has_related_followers = False
+                if existing_related_master:
+                    related_followers = session.query(Trade).filter(
+                        Trade.master_trade_id == existing_related_master.id,
+                        Trade.copied_from_master == True
+                    ).first()
+                    has_related_followers = related_followers is not None
+                
+                # If any duplicate is found, skip processing
+                if existing_copy or existing_master_copy or has_related_followers:
+                    logger.info(f"📝 {order_status} order already copied, skipping duplicate")
+                    logger.info(f"🔍 Duplicate detection results: follower_copy={existing_copy is not None}, master_copy_flag={existing_master_copy is not None}, related_followers={has_related_followers}")
+                    session.close()
+                    return
+                
+                # Continue with position analysis only if no duplicates found
+                logger.info(f"✅ No duplicates found, proceeding to copy {order_status} order")
+                
                 # For FILLED orders, check if we already copied this as NEW to avoid duplicates
                 if order_status == 'FILLED':
                     # COMPREHENSIVE DUPLICATE CHECK: Multiple methods to detect if this order was already copied
