@@ -378,18 +378,8 @@ class CopyTradingEngine:
         """Check for new trades in master account using Binance API"""
         try:
             # Get the last trade timestamp for this master
-            # STARTUP PROTECTION: On startup, only look back 5 minutes maximum to catch more NEW orders
-            if master_id not in self.startup_complete:
-                # On startup, only look back 5 minutes or server start time, whichever is later
-                five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
-                default_check_time = max(five_minutes_ago, self.server_start_time)
-                logger.info(f"🚀 STARTUP MODE: Only looking back to {default_check_time} (max 5 minutes)")
-            else:
-                # Normal operation - never go back further than server startup time
-                default_check_time = max(datetime.utcnow() - timedelta(hours=1), self.server_start_time)
-            
+            default_check_time = max(datetime.utcnow() - timedelta(hours=1), self.server_start_time)
             last_check = self.last_trade_check.get(master_id, default_check_time)
-            logger.info(f"🕐 Default check time: {default_check_time}, Last check: {last_check}")
             
             # STARTUP PROTECTION: On first run, only process orders created after server startup time
             if master_id not in self.startup_complete:
@@ -446,37 +436,7 @@ class CopyTradingEngine:
             
         except Exception as e:
             logger.error(f"Error checking master trades: {e}")
-    
-    async def get_recent_orders(self, client: BinanceClient, since_time: datetime):
-        """Deprecated: historical order fetching removed as per user's request.
-        Returns only open orders to minimize load and rely on open->closed detection.
-        """
-        try:
-            open_orders = await client.get_open_orders()
-            return open_orders or []
-        except Exception as e:
-            logger.error(f"Error fetching open orders: {e}")
-            return []
-    
-    async def check_database_trades(self, master_id: int, last_check: datetime):
-        """Fallback method to check database for trades"""
-        try:
-            session = get_session()
-            
-            recent_trades = session.query(Trade).filter(
-                Trade.account_id == master_id,
-                Trade.created_at > last_check,
-                Trade.copied_from_master == False
-            ).all()
-            
-            for trade in recent_trades:
-                await self.copy_trade_to_followers(trade, session)
-            
-            session.close()
-            
-        except Exception as e:
-            logger.error(f"Error checking database trades: {e}")
-    
+
     async def process_master_order(self, master_id: int, order: dict):
         """Process an order from master account (open, partially filled, or filled)"""
         session = None
@@ -1333,27 +1293,6 @@ class CopyTradingEngine:
             
         except Exception as e:
             logger.error(f"Error in fallback calculation: {e}")
-            return 0
-    
-    async def get_portfolio_risk(self, follower_client: BinanceClient, follower_balance: float) -> float:
-        """Calculate current portfolio risk percentage"""
-        try:
-            positions = await follower_client.get_positions()
-            total_position_value = 0
-            
-            for position in positions:
-                if position.get('size', 0) != 0:  # Only count open positions
-                    position_value = abs(float(position.get('size', 0))) * float(position.get('markPrice', 0))
-                    total_position_value += position_value
-            
-            portfolio_risk_percentage = (total_position_value / follower_balance) * 100 if follower_balance > 0 else 0
-            
-            logger.info(f"📊 Portfolio risk: ${total_position_value:.2f} ({portfolio_risk_percentage:.1f}% of balance)")
-            
-            return portfolio_risk_percentage
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Could not calculate portfolio risk: {e}")
             return 0
     
     async def place_follower_trade(self, master_trade: Trade, config: CopyTradingConfig, quantity: float, session: Session):
@@ -2386,46 +2325,6 @@ class CopyTradingEngine:
             
         except Exception as e:
             logger.error(f"❌ Error handling master order cancellation: {e}")
-            import traceback
-            logger.error(f"Full traceback: {traceback.format_exc()}")
-            session.rollback()
-    
-    async def handle_position_closing(self, master_id: int, order: dict, session: Session):
-        """Handle position closing orders (market orders that close existing positions)"""
-        try:
-            order_id = str(order['orderId'])
-            logger.info(f"🔄 Handling position closing order: {order_id}")
-            
-            # Create a temporary trade object to use existing closing logic
-            temp_trade = Trade(
-                account_id=master_id,
-                symbol=order['symbol'],
-                side=order['side'],
-                order_type=order['type'],
-                quantity=float(order.get('executedQty', order.get('origQty', 0))),
-                price=float(order.get('avgPrice', order.get('price', 0))),
-                status='FILLED',
-                binance_order_id=str(order['orderId']),
-                copied_from_master=False
-            )
-            
-            # Add to database
-            session.add(temp_trade)
-            session.commit()
-            session.refresh(temp_trade)
-            
-            logger.info(f"✅ Created trade record {temp_trade.id} for position closing")
-            
-            # Check if this is a position closing order and close follower positions
-            if await self.is_position_closing_order(master_id, temp_trade, session):
-                logger.info(f"🔄 Confirmed position closing - closing follower positions")
-                await self.close_follower_positions(temp_trade, session)
-            else:
-                logger.info(f"📈 Not a position closing order - copying as regular trade")
-                await self.copy_trade_to_followers(temp_trade, session)
-            
-        except Exception as e:
-            logger.error(f"❌ Error handling position closing: {e}")
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
             session.rollback()

@@ -143,38 +143,6 @@ class BinanceClient:
             logger.error(f"✗ Subaccount connection test failed: {e}")
             return False
     
-    async def test_connection_alternative(self) -> bool:
-        """Alternative connection test that doesn't use futures_account()"""
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            
-            # Test with futures_exchange_info (public endpoint, doesn't need account permissions)
-            exchange_info = await loop.run_in_executor(None, self.client.futures_exchange_info)
-            logger.info("Alternative connection test successful using futures_exchange_info()")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Alternative connection test failed: {e}")
-            return False
-    
-    async def get_account_info(self) -> Dict:
-        """Get account information"""
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            account = await loop.run_in_executor(None, self.client.futures_account)
-            return {
-                'total_wallet_balance': float(account['totalWalletBalance']),
-                'total_unrealized_profit': float(account['totalUnrealizedProfit']),
-                'total_margin_balance': float(account['totalMarginBalance']),
-                'available_balance': float(account['availableBalance']),
-                'positions': account['positions']
-            }
-        except Exception as e:
-            logger.error(f"Failed to get account info: {e}")
-            raise
-    
     async def get_positions(self) -> List[Dict]:
         """Get current positions - handles subaccounts with limited permissions"""
         try:
@@ -239,23 +207,6 @@ class BinanceClient:
             logger.warning(f"Failed to get total wallet balance (possibly limited permissions): {e}")
             return 0.0
 
-    async def get_total_margin_balance(self) -> float:
-        """Get total margin balance (wallet + unrealized PnL). Useful for risk/equity."""
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            account = await loop.run_in_executor(None, self.client.futures_account)
-            return float(account.get('totalMarginBalance', 0.0))
-        except BinanceAPIException as e:
-            if e.code == -2015:
-                logger.warning("⚠️ Margin balance access denied (-2015) - limited permissions")
-                return 0.0
-            logger.error(f"Failed to get total margin balance: {e}")
-            return 0.0
-        except Exception as e:
-            logger.warning(f"Failed to get total margin balance (possibly limited permissions): {e}")
-            return 0.0
-    
     async def set_leverage(self, symbol: str, leverage: int) -> bool:
         """Set leverage for a symbol"""
         try:
@@ -613,20 +564,6 @@ class BinanceClient:
             logger.warning(f"Failed to get open orders (possibly limited permissions): {e}")
             return []
 
-    async def get_order_status(self, symbol: str, order_id: str) -> Dict:
-        """Get order status"""
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            order = await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: self.client.futures_get_order(symbol=symbol, orderId=order_id)),
-                timeout=5
-            )
-            return order
-        except Exception as e:
-            logger.error(f"Failed to get order status: {e}")
-            raise
-    
     async def get_symbol_info(self, symbol: str) -> Dict:
         """Get symbol information"""
         try:
@@ -656,35 +593,6 @@ class BinanceClient:
             return float(price['markPrice'])
         except Exception as e:
             logger.error(f"Failed to get mark price: {e}")
-            raise
-
-    async def calculate_position_size(self, symbol: str, risk_amount: float, leverage: int) -> float:
-        """Calculate position size based on risk amount and leverage"""
-        try:
-            mark_price = await self.get_mark_price(symbol)
-            position_value = risk_amount * leverage
-            quantity = position_value / mark_price
-            
-            # Get symbol info for quantity precision
-            symbol_info = await self.get_symbol_info(symbol)
-            if symbol_info:
-                lot_size_filter = next((f for f in symbol_info['filters'] if f['filterType'] == 'LOT_SIZE'), None)
-                if lot_size_filter:
-                    step_size = float(lot_size_filter['stepSize'])
-                    min_qty = float(lot_size_filter['minQty'])
-                    max_qty = float(lot_size_filter['maxQty'])
-                    
-                    # Round to step size
-                    quantity = round(quantity / step_size) * step_size
-                    
-                    # Ensure within bounds
-                    quantity = max(min_qty, min(quantity, max_qty))
-                    
-                    logger.info(f"📊 Position size calculated: {quantity} (min: {min_qty}, max: {max_qty}, step: {step_size})")
-            
-            return quantity
-        except Exception as e:
-            logger.error(f"Failed to calculate position size: {e}")
             raise
 
     async def adjust_quantity_precision(self, symbol: str, quantity: float) -> float:
@@ -734,67 +642,6 @@ class BinanceClient:
             fallback_qty = round(quantity, 1)
             logger.warning(f"Using emergency fallback precision: {quantity} -> {fallback_qty}")
             return fallback_qty
-
-    async def start_user_socket(self, callback):
-        """Start user data stream using websockets"""
-        try:
-            # Get listen key for user data stream
-            listen_key = self.client.futures_stream_get_listen_key()
-            
-            # Create WebSocket connection
-            ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
-            if self.testnet:
-                ws_url = f"wss://stream.binancefuture.com/ws/{listen_key}"
-            
-            async def websocket_handler():
-                try:
-                    async with websockets.connect(ws_url) as websocket:
-                        self.ws_connections['user_data'] = websocket
-                        logger.info("User data stream started")
-                        
-                        while True:
-                            try:
-                                message = await websocket.recv()
-                                data = json.loads(message)
-                                await callback(data)
-                            except websockets.exceptions.ConnectionClosed:
-                                logger.warning("WebSocket connection closed, attempting to reconnect...")
-                                break
-                            except Exception as e:
-                                logger.error(f"Error processing WebSocket message: {e}")
-                                
-                except Exception as e:
-                    logger.error(f"WebSocket connection error: {e}")
-            
-            # Start WebSocket task
-            task = asyncio.create_task(websocket_handler())
-            self.ws_tasks['user_data'] = task
-            return task
-            
-        except Exception as e:
-            logger.error(f"Failed to start user socket: {e}")
-            raise
-
-    async def stop_user_socket(self):
-        """Stop user data stream"""
-        try:
-            if 'user_data' in self.ws_tasks:
-                task = self.ws_tasks['user_data']
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                del self.ws_tasks['user_data']
-                
-            if 'user_data' in self.ws_connections:
-                websocket = self.ws_connections['user_data']
-                await websocket.close()
-                del self.ws_connections['user_data']
-                
-            logger.info("User data stream stopped")
-        except Exception as e:
-            logger.error(f"Failed to stop user socket: {e}")
 
     async def __aenter__(self):
         return self
