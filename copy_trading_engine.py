@@ -499,49 +499,92 @@ class CopyTradingEngine:
             # AGGRESSIVE PROTECTION: Only process very recent orders
             five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
             
-            # IMPROVED CANCELLATION HANDLING: Process recent cancellations even during startup
-            if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']:
-                # Calculate how long the server has been running
-                server_uptime = datetime.utcnow() - self.server_start_time
-                logger.info(f"🕐 Server uptime: {server_uptime}")
-                
-                # Only process very recent cancelled orders (within last 2 minutes)
-                two_minutes_ago = datetime.utcnow() - timedelta(minutes=2)
-                if order_time < two_minutes_ago:
-                    logger.info(f"🛡️ OLD CANCELLED ORDER: Skipping cancelled order {order_id} from {order_time} (older than 2 minutes)")
-                    return
-                
-                # Process recent cancellations to cancel follower orders
-                logger.info(f"🔄 PROCESSING RECENT CANCELLATION: {order_id} from {order_time} - will cancel follower orders")
-                
-                # For cancelled orders, we need to cancel corresponding follower orders
-                # Don't return here - let it process the cancellation
+            # POSITION CLOSING EXCEPTION: Check if this might be a position-closing order that should be processed regardless of age
+            is_potentially_closing = False
+            if order_status == 'FILLED' and order.get('type') == 'MARKET':
+                # Quick check for potential position closing - look at reduceOnly flag or check for follower positions
+                is_reduce_only = order.get('reduceOnly', False)
+                if is_reduce_only:
+                    logger.info(f"🔄 REDUCE_ONLY ORDER: Will process regardless of age due to reduceOnly flag")
+                    is_potentially_closing = True
+                else:
+                    # Quick check if there are follower positions that could be closed by this order
+                    try:
+                        # Get copy trading configurations for this master
+                        temp_session = Session()
+                        configs = temp_session.query(CopyTradingConfig).filter(
+                            CopyTradingConfig.master_account_id == master_id,
+                            CopyTradingConfig.is_active == True
+                        ).all()
+                        
+                        for config in configs:
+                            follower_client = self.follower_clients.get(config.follower_account_id)
+                            if follower_client:
+                                try:
+                                    follower_positions = await follower_client.get_positions()
+                                    for pos in follower_positions:
+                                        if (pos['symbol'] == order['symbol'] and 
+                                            abs(float(pos['size'])) > 0.001 and
+                                            ((pos['side'] == 'LONG' and order['side'] == 'SELL') or 
+                                             (pos['side'] == 'SHORT' and order['side'] == 'BUY'))):
+                                            logger.info(f"🎯 POTENTIAL POSITION CLOSING: Found follower position {pos['side']} {pos['size']} that can be closed by master {order['side']} order")
+                                            is_potentially_closing = True
+                                            break
+                                except Exception as e:
+                                    logger.debug(f"Could not check follower positions for account {config.follower_account_id}: {e}")
+                            if is_potentially_closing:
+                                break
+                        temp_session.close()
+                    except Exception as e:
+                        logger.debug(f"Could not perform quick position closing check: {e}")
             
-            # For NEW orders (most important), be more lenient - allow up to 10 minutes
-            elif order_status in ['NEW', 'PARTIALLY_FILLED']:
-                ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
-                if order_time < ten_minutes_ago:
-                    logger.info(f"🛡️ OLD NEW ORDER FILTER: Skipping old NEW order {order_id} from {order_time} (older than 10 minutes)")
+            # Apply time filters with position closing exception
+            if not is_potentially_closing:
+                # IMPROVED CANCELLATION HANDLING: Process recent cancellations even during startup
+                if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']:
+                    # Calculate how long the server has been running
+                    server_uptime = datetime.utcnow() - self.server_start_time
+                    logger.info(f"🕐 Server uptime: {server_uptime}")
+                    
+                    # Only process very recent cancelled orders (within last 2 minutes)
+                    two_minutes_ago = datetime.utcnow() - timedelta(minutes=2)
+                    if order_time < two_minutes_ago:
+                        logger.info(f"🛡️ OLD CANCELLED ORDER: Skipping cancelled order {order_id} from {order_time} (older than 2 minutes)")
+                        return
+                    
+                    # Process recent cancellations to cancel follower orders
+                    logger.info(f"🔄 PROCESSING RECENT CANCELLATION: {order_id} from {order_time} - will cancel follower orders")
+                    
+                    # For cancelled orders, we need to cancel corresponding follower orders
+                    # Don't return here - let it process the cancellation
+                
+                # For NEW orders (most important), be more lenient - allow up to 10 minutes
+                elif order_status in ['NEW', 'PARTIALLY_FILLED']:
+                    ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+                    if order_time < ten_minutes_ago:
+                        logger.info(f"🛡️ OLD NEW ORDER FILTER: Skipping old NEW order {order_id} from {order_time} (older than 10 minutes)")
+                        return
+                    else:
+                        logger.info(f"🚀 NEW ORDER DETECTED: Processing {order_id} from {order_time} - PRIORITY")
+                
+                # For FILLED orders (market orders), allow up to 10 minutes for better detection
+                elif order_status == 'FILLED':
+                    ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+                    if order_time < ten_minutes_ago:
+                        logger.info(f"🛡️ OLD FILLED ORDER FILTER: Skipping old FILLED order {order_id} from {order_time} (older than 10 minutes)")
+                        return
+                    else:
+                        logger.info(f"✅ FILLED ORDER (MARKET): Processing {order_id} from {order_time} - HIGH PRIORITY")
+                        logger.info(f"🚀 MARKET ORDER DETAILS: {order['symbol']} {order['side']} {executed_qty} @ avg_price={order.get('avgPrice', 'N/A')}")
+                
+                # For all other orders, only process if within 5 minutes
+                elif order_time < five_minutes_ago:
+                    logger.info(f"🛡️ OLD ORDER FILTER: Skipping old order {order_id} from {order_time} (older than 5 minutes)")
                     return
                 else:
-                    logger.info(f"🚀 NEW ORDER DETECTED: Processing {order_id} from {order_time} - PRIORITY")
-            
-            # For FILLED orders (market orders), allow up to 10 minutes for better detection
-            elif order_status == 'FILLED':
-                ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
-                if order_time < ten_minutes_ago:
-                    logger.info(f"🛡️ OLD FILLED ORDER FILTER: Skipping old FILLED order {order_id} from {order_time} (older than 10 minutes)")
-                    return
-                else:
-                    logger.info(f"✅ FILLED ORDER (MARKET): Processing {order_id} from {order_time} - HIGH PRIORITY")
-                    logger.info(f"🚀 MARKET ORDER DETAILS: {order['symbol']} {order['side']} {executed_qty} @ avg_price={order.get('avgPrice', 'N/A')}")
-            
-            # For all other orders, only process if within 5 minutes
-            elif order_time < five_minutes_ago:
-                logger.info(f"🛡️ OLD ORDER FILTER: Skipping old order {order_id} from {order_time} (older than 5 minutes)")
-                return
+                    logger.info(f"✅ Order {order_id} is recent - processing")
             else:
-                logger.info(f"✅ Order {order_id} is recent - processing")
+                logger.info(f"🔄 POSITION CLOSING EXCEPTION: Processing order {order_id} from {order_time} (potential position closing order - bypassing time filters)")
             
 # Removed duplicate checking to simplify processing
             
