@@ -507,10 +507,10 @@ class CopyTradingEngine:
                     logger.info(f"🕐 Server uptime: {server_uptime}")
                     
                     # Only process very recent cancelled orders (within last 2 minutes)
-                    two_minutes_ago = datetime.utcnow() - timedelta(minutes=2)
-                    if order_time < two_minutes_ago:
-                        logger.info(f"🛡️ OLD CANCELLED ORDER: Skipping cancelled order {order_id} from {order_time} (older than 2 minutes)")
-                        return
+                    # two_minutes_ago = datetime.utcnow() - timedelta(minutes=2)
+                    # if order_time < two_minutes_ago:
+                    #     logger.info(f"🛡️ OLD CANCELLED ORDER: Skipping cancelled order {order_id} from {order_time} (older than 2 minutes)")
+                    #     return
                     
                     # Process recent cancellations to cancel follower orders
                     logger.info(f"🔄 PROCESSING RECENT CANCELLATION: {order_id} from {order_time} - will cancel follower orders")
