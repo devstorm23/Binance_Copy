@@ -26,8 +26,6 @@ class CopyTradingEngine:
         self.is_running = False
         self.monitoring_tasks = {}
         self.last_trade_check = {}
-        self.processed_orders = {}  # account_id -> set of order_ids to avoid duplicates
-        self.last_processed_order_time = {}  # account_id -> datetime to avoid processing old orders on restart
         self.startup_complete = {}  # account_id -> bool to track if startup processing is complete
         self.server_start_time = datetime.utcnow()  # Track when the server started
         self.master_open_orders_cache = {}  # account_id -> {orderId: order_dict}
@@ -575,69 +573,10 @@ class CopyTradingEngine:
             else:
                 logger.info(f"✅ Order {order_id} is recent - processing")
             
-            # Check if this order is from before restart (prevent duplicate processing)
-            if master_id in self.last_processed_order_time:
-                if order_time < self.last_processed_order_time[master_id]:
-                    logger.info(f"⏭️ Skipping old order {order_id} from {order_time} (before restart time {self.last_processed_order_time[master_id]})")
-                    return
+# Removed duplicate checking to simplify processing
             
-            # Check if we've already processed this order
-            if master_id not in self.processed_orders:
-                self.processed_orders[master_id] = set()
-                logger.info(f"🆕 Initialized processed_orders for master {master_id}")
-            
-            logger.info(f"🔍 DUPLICATE CHECK: Checking if order {order_id} was already processed...")
-            logger.info(f"🔍 Current processed_orders for master {master_id}: {len(self.processed_orders[master_id])} orders")
-            if order_id in self.processed_orders[master_id]:
-                logger.info(f"⏭️ Order {order_id} found in processed_orders cache - checking database...")
-                # Check if the order actually exists in the database with proper error handling
-                session_check = None
-                try:
-                    session_check = get_session()
-                    existing_trade = session_check.query(Trade).filter(
-                        Trade.binance_order_id == order_id,
-                        Trade.account_id == master_id
-                    ).first()
-                    
-                    if existing_trade:
-                        logger.debug(f"✅ Order {order_id} exists in database, skipping")
-                        # For cancelled orders, still check if we need to handle follower cancellations
-                        if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED'] and existing_trade.status != 'CANCELLED':
-                            logger.info(f"🔄 Order {order_id} status changed to CANCELLED - handling follower cancellations")
-                            existing_trade.status = 'CANCELLED'
-                            session_check.commit()
-                            await self.handle_master_order_cancellation_with_trade(existing_trade, session_check)
-                            session_check.close()
-                        return
-                    else:
-                        logger.warning(f"🔄 Order {order_id} NOT in database - reprocessing...")
-                        # Remove from processed set so we can reprocess
-                        self.processed_orders[master_id].discard(order_id)
-                        
-                except Exception as db_error:
-                    logger.error(f"❌ Database check failed for order {order_id}: {db_error}")
-                    # Continue processing the order despite database check failure
-                    self.processed_orders[master_id].discard(order_id)
-                finally:
-                    if session_check:
-                        try:
-                            session_check.close()
-                        except Exception as cleanup_error:
-                            logger.error(f"❌ Error closing database session: {cleanup_error}")
-            else:
-                logger.info(f"✅ FRESH ORDER: {order_id} not in processed_orders cache - proceeding with processing")
-            
-            logger.info(f"🎯 TIME FILTERING COMPLETE: Order {order_id} ({order_status}) passed all checks - proceeding to processing")
-            logger.info(f"📋 Processing NEW master order: {order['symbol']} {order['side']} {original_qty} - Status: {order_status}")
-            logger.info(f"🚀 PROCEEDING TO DATABASE CREATION: Order {order_id} will be processed now")
-            
-            # Clean up old processed orders to prevent memory leaks (keep only last 1000)
-            if len(self.processed_orders[master_id]) > 1000:
-                # Convert to list, sort by order_id (assuming newer orders have higher IDs)
-                sorted_orders = sorted(self.processed_orders[master_id])
-                # Keep only the most recent 500 orders
-                self.processed_orders[master_id] = set(sorted_orders[-500:])
-                logger.debug(f"🧹 Cleaned up processed orders for master {master_id}")
+            logger.info(f"🎯 Processing order {order_id} ({order_status})")
+            logger.info(f"📋 Processing master order: {order['symbol']} {order['side']} {original_qty} - Status: {order_status}")
             
             # Create trade record in database
             logger.info(f"💾 Creating database session...")
@@ -800,9 +739,7 @@ class CopyTradingEngine:
             logger.info(f"🔒 Closing database session...")
             session.close()
             
-            # Mark this order as processed ONLY after successful completion
-            self.processed_orders[master_id].add(order_id)
-            logger.info(f"✅ Master order {order_id} processed completely and marked as processed")
+            logger.info(f"✅ Master order {order_id} processed successfully")
             
         except Exception as e:
             logger.error(f"❌ Error processing master order: {e}")
