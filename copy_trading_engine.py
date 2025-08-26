@@ -499,6 +499,7 @@ class CopyTradingEngine:
             # AGGRESSIVE PROTECTION: Only process very recent orders
             five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
             
+<<<<<<< HEAD
             # POSITION CLOSING EXCEPTION: Check if this might be a position-closing order that should be processed regardless of age
             is_potentially_closing = False
             if order_status == 'FILLED' and order.get('type') == 'MARKET':
@@ -507,6 +508,32 @@ class CopyTradingEngine:
                 if is_reduce_only:
                     logger.info(f"🔄 REDUCE_ONLY ORDER: Will process regardless of age due to reduceOnly flag")
                     is_potentially_closing = True
+=======
+            # IMPROVED CANCELLATION HANDLING: Process recent cancellations even during startup
+            if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']:
+                # Calculate how long the server has been running
+                server_uptime = datetime.utcnow() - self.server_start_time
+                logger.info(f"🕐 Server uptime: {server_uptime}")
+                
+                # Only process very recent cancelled orders (within last 2 minutes)
+                two_minutes_ago = datetime.utcnow() - timedelta(minutes=2)
+                if order_time < two_minutes_ago:
+                    logger.info(f"🛡️ OLD CANCELLED ORDER: Skipping cancelled order {order_id} from {order_time} (older than 2 minutes)")
+                    return
+                
+                # Process recent cancellations to cancel follower orders
+                logger.info(f"🔄 PROCESSING RECENT CANCELLATION: {order_id} from {order_time} - will cancel follower orders")
+                
+                # For cancelled orders, we need to cancel corresponding follower orders
+                # Don't return here - let it process the cancellation
+            
+            # For NEW orders (most important), be more lenient - allow up to 10 minutes
+            elif order_status in ['NEW', 'PARTIALLY_FILLED']:
+                ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+                if order_time < ten_minutes_ago:
+                    logger.info(f"🛡️ OLD NEW ORDER FILTER: Skipping old NEW order {order_id} from {order_time} (older than 10 minutes)")
+                    return
+>>>>>>> parent of 14ff102 (Update: fix the cancellation time)
                 else:
                     # Quick check if there are follower positions that could be closed by this order
                     try:
