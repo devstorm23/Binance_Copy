@@ -30,6 +30,7 @@ class CopyTradingEngine:
         self.last_processed_order_time = {}  # account_id -> datetime to avoid processing old orders on restart
         self.startup_complete = {}  # account_id -> bool to track if startup processing is complete
         self.server_start_time = datetime.utcnow()  # Track when the server started
+        self.master_open_orders_cache = {}  # account_id -> {orderId: order_dict}
         logger.info(f"🏗️ CopyTradingEngine initialized at {self.server_start_time}")
         logger.info(f"🕐 Server startup time (timestamp): {self.server_start_time.timestamp()}")
         
@@ -433,76 +434,44 @@ class CopyTradingEngine:
             else:
                 effective_last_check = last_check
             
-            # Get recent trades from Binance API directly
-            logger.debug(f"Checking trades for master {master_id} since {effective_last_check}")
-            
+            # Poll only open orders to avoid heavy historical calls
             try:
-                # Get recent orders from Binance
-                recent_orders = await self.get_recent_orders(client, effective_last_check)
-                
-                if recent_orders:
-                    logger.info(f"Found {len(recent_orders)} recent orders for master {master_id}")
-                    
-                    # Sort orders with priority: NEW orders first, then by time
-                    def order_priority(order):
-                        status = order.get('status', 'UNKNOWN')
-                        time_value = order.get('time', order.get('updateTime', 0))
-                        
-                        # Priority order: NEW (0), FILLED (1), PARTIALLY_FILLED (2), others (3)
-                        # FILLED orders (market orders) get high priority for immediate copying
-                        if status == 'NEW':
-                            priority = 0  # Highest priority for NEW orders
-                        elif status == 'FILLED':
-                            priority = 1  # High priority for FILLED orders (market orders)
-                        elif status == 'PARTIALLY_FILLED':
-                            priority = 2
-                        else:
-                            priority = 3
-                        
-                        return (priority, time_value)
-                    
-                    recent_orders.sort(key=order_priority)
-                    logger.info(f"📊 Sorted orders by priority (NEW first, then FILLED market orders)")
-                    
-                    # Count different order types for debugging
-                    order_counts = {}
-                    for order in recent_orders:
-                        status = order.get('status', 'UNKNOWN')
-                        order_counts[status] = order_counts.get(status, 0) + 1
-                    
-                    logger.info(f"📊 Order breakdown: {order_counts}")
-                    
-                    for order in recent_orders:
+                open_orders = await client.get_open_orders()
+                all_orders = open_orders or []
+                # Merge with previously seen open orders to detect status transitions
+                prev_cache = self.master_open_orders_cache.get(master_id, {})
+                current_cache = {str(o['orderId']): o for o in all_orders}
+
+                # Process current open orders (NEW/PARTIALLY_FILLED)
+                for order in all_orders:
+                    await self.process_master_order(master_id, order)
+
+                # Detect cancellations by comparing previous cache with current
+                for prev_id, prev_order in prev_cache.items():
+                    if prev_id not in current_cache:
+                        # Order disappeared from open orders; fetch its latest status once
                         try:
-                            order_status = order.get('status', 'UNKNOWN')
-                            order_time = datetime.utcfromtimestamp(order.get('time', order.get('updateTime', 0)) / 1000)
-                            
-                            # Only surface logs for orders that will pass startup/time filters
-                            if order_time >= self.server_start_time:
-                                if order_status in ['NEW', 'PARTIALLY_FILLED']:
-                                    logger.info(f"🚀 DETECTED NEW ORDER: {order['orderId']} ({order_status}) from {order_time} for master {master_id}")
-                                elif order_status == 'FILLED':
-                                    logger.info(f"🏁 DETECTED FILLED ORDER: {order['orderId']} (FILLED) from {order_time} for master {master_id} - MARKET ORDER")
-                                logger.info(f"📝 About to process order {order['orderId']} (Status: {order_status}) for master {master_id}")
-                            else:
-                                # Pre-start orders: keep logs at debug only
-                                logger.debug(f"Pre-start order {order['orderId']} ({order_status}) at {order_time} - will be ignored")
-                            await self.process_master_order(master_id, order)
-                            if order_time >= self.server_start_time:
-                                logger.info(f"✅ Successfully processed order {order['orderId']} for master {master_id}")
-                            else:
-                                logger.debug(f"Skipped pre-start order {order['orderId']}")
-                        except Exception as order_error:
-                            logger.error(f"❌ Error processing order {order['orderId']} for master {master_id}: {order_error}")
-                            import traceback
-                            logger.error(f"Full traceback: {traceback.format_exc()}")
-                else:
-                    logger.debug(f"No recent orders found for master {master_id}")
-                    
+                            # Binance doesn't provide direct get_order by id without symbol in cache here.
+                            # Construct a minimal cancellation event to drive cancellation handling.
+                            synthetic = {
+                                'orderId': prev_order['orderId'],
+                                'symbol': prev_order['symbol'],
+                                'side': prev_order.get('side', 'BUY'),
+                                'status': 'CANCELED',
+                                'time': prev_order.get('time', int(datetime.utcnow().timestamp() * 1000)),
+                                'updateTime': int(datetime.utcnow().timestamp() * 1000),
+                                'origQty': prev_order.get('origQty', prev_order.get('quantity', '0')),
+                                'type': prev_order.get('type', 'LIMIT')
+                            }
+                            logger.info(f"🧭 Detected order removal from open book, treating as CANCELED: {prev_id}")
+                            await self.process_master_order(master_id, synthetic)
+                        except Exception as synth_err:
+                            logger.warning(f"⚠️ Failed to synthesize cancellation for order {prev_id}: {synth_err}")
+
+                # Update cache
+                self.master_open_orders_cache[master_id] = current_cache
             except Exception as e:
-                logger.warning(f"Failed to get orders from Binance for master {master_id}: {e}")
-                # Fallback to database check
-                await self.check_database_trades(master_id, last_check)
+                logger.warning(f"Failed to get open orders for master {master_id}: {e}")
             
             # Update last check time
             self.last_trade_check[master_id] = datetime.utcnow()
@@ -511,154 +480,14 @@ class CopyTradingEngine:
             logger.error(f"Error checking master trades: {e}")
     
     async def get_recent_orders(self, client: BinanceClient, since_time: datetime):
-        """Get recent orders from Binance API - includes both open and filled orders"""
+        """Deprecated: historical order fetching removed as per user's request.
+        Returns only open orders to minimize load and rely on open->closed detection.
+        """
         try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            
-            # During startup, ensure we don't fetch orders from before the server started
-            effective_since_time = max(since_time, self.server_start_time)
-            
-            # Convert datetime to timestamp
-            start_time = int(effective_since_time.timestamp() * 1000)
-            
-            if effective_since_time != since_time:
-                logger.info(f"🔍 Startup protection: Adjusted time from {since_time} to {effective_since_time}")
-            logger.info(f"🔍 Fetching orders since {effective_since_time}")
-            
-            # Get both open orders and recent historical orders
-            all_orders = []
-            
-            # 1. Get current open orders (these should be copied immediately)
-            try:
-                open_orders = await client.get_open_orders()
-                if open_orders:
-                    logger.info(f"📋 Retrieved {len(open_orders)} open orders")
-                    new_order_count = 0
-                    for order in open_orders:
-                        # Fix timestamp display in logs
-                        order_time = int(order['time'])
-                        current_time_ms = int(datetime.utcnow().timestamp() * 1000)
-                        if order_time > current_time_ms + 86400000:  # More than 1 day in future
-                            timestamp_display = "INVALID_FUTURE_TIME"
-                        else:
-                            timestamp_display = datetime.utcfromtimestamp(order_time / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                        
-                        # Count NEW orders specifically
-                        if order.get('status') == 'NEW':
-                            new_order_count += 1
-                            logger.info(f"🆕 NEW OPEN ORDER: ID={order['orderId']}, Symbol={order['symbol']}, Side={order['side']}, Status={order['status']}, Time={timestamp_display}")
-                        else:
-                            logger.info(f"📋 Open order details: ID={order['orderId']}, Symbol={order['symbol']}, Side={order['side']}, Status={order['status']}, Time={timestamp_display}")
-                    
-                    if new_order_count > 0:
-                        logger.info(f"🚨 PRIORITY: Found {new_order_count} NEW orders that need immediate copying!")
-                    
-                    all_orders.extend(open_orders)
-                else:
-                    logger.debug("📋 No open orders found")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to get open orders: {e}")
-            
-            # 2. Get recent historical orders - STARTUP PROTECTION to prevent processing old orders
-            try:
-                # During startup, never look back further than server start time
-                # After startup, limit to 30 minutes to avoid missing delayed fills/closures
-                server_start_time_ms = int(self.server_start_time.timestamp() * 1000)
-                thirty_minutes_ago = int((datetime.utcnow() - timedelta(minutes=30)).timestamp() * 1000)
-                # Use the latest of: requested start time, 30 minutes ago, or server start time
-                effective_start_time = max(start_time, thirty_minutes_ago, server_start_time_ms)
-                
-                historical_orders = await loop.run_in_executor(
-                    None, 
-                    lambda: client.client.futures_get_all_orders(startTime=effective_start_time, limit=50)
-                )
-                logger.info(f"📊 Retrieved {len(historical_orders)} historical orders from Binance (since {datetime.utcfromtimestamp(effective_start_time / 1000)})")
-                
-                # Debug log to show startup protection is working
-                if effective_start_time > start_time:
-                    logger.info(f"🛡️ Startup protection active: Limited from {datetime.utcfromtimestamp(start_time / 1000)} to {datetime.utcfromtimestamp(effective_start_time / 1000)}")
-                
-                all_orders.extend(historical_orders)
-            except Exception as e:
-                logger.error(f"❌ Failed to get historical orders: {e}")
-            
-            # Remove duplicates based on orderId and filter for relevant orders
-            seen_orders = set()
-            relevant_orders = []
-            
-            for order in all_orders:
-                order_id = order['orderId']
-                order_time = int(order['time'])
-                order_status = order['status']
-                
-                # Fix timestamp issue: Binance sometimes returns future timestamps
-                # Validate timestamp is reasonable (not in the far future)
-                current_time_ms = int(datetime.utcnow().timestamp() * 1000)
-                if order_time > current_time_ms + 86400000:  # More than 1 day in future
-                    logger.warning(f"⚠️ Order {order_id} has invalid future timestamp: {order_time}, using current time")
-                    order_time = current_time_ms
-                
-                # STRICT FILTERING: Only process orders that are:
-                # 1. Open orders (NEW/PARTIALLY_FILLED) - regardless of time
-                # 2. Recent filled orders (within last 30 minutes) - market orders are processed immediately
-                # 3. Very recent cancelled orders (within last 5 minutes) - but NEVER from before server startup
-                is_open_order = order_status in ['NEW', 'PARTIALLY_FILLED']
-                five_minutes_ago = int((datetime.utcnow() - timedelta(minutes=5)).timestamp() * 1000)
-                thirty_minutes_ago = int((datetime.utcnow() - timedelta(minutes=30)).timestamp() * 1000)
-                server_start_time_ms = int(self.server_start_time.timestamp() * 1000)
-                update_time_ms = int(order.get('updateTime', order_time))
-                is_recently_filled = order_status == 'FILLED' and update_time_ms >= thirty_minutes_ago
-                # For cancelled orders, they must be both recent AND after server startup
-                is_recently_cancelled = (order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED'] and 
-                                       update_time_ms >= five_minutes_ago and 
-                                       update_time_ms >= server_start_time_ms)
-                
-                # Debug logging for cancelled orders that are being filtered out
-                if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']:
-                    order_time_readable = datetime.utcfromtimestamp(order_time / 1000)
-                    server_start_readable = datetime.utcfromtimestamp(server_start_time_ms / 1000)
-                    if order_time < server_start_time_ms:
-                        logger.info(f"🛡️ FILTERED: Cancelled order {order_id} from {order_time_readable} (before server start {server_start_readable})")
-                    elif not is_recently_cancelled:
-                        logger.debug(f"🛡️ FILTERED: Old cancelled order {order_id} from {order_time_readable}")
-                
-                if (order_id not in seen_orders and 
-                    order['side'] in ['BUY', 'SELL'] and 
-                    order_status in ['NEW', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED'] and
-                    (is_open_order or is_recently_filled or is_recently_cancelled)):
-                    seen_orders.add(order_id)
-                    relevant_orders.append(order)
-                    if is_open_order:
-                        if order_status == 'NEW':
-                            status_note = "🆕 NEW ORDER (PRIORITY)"
-                        else:
-                            status_note = "📋 PARTIALLY FILLED"
-                    elif is_recently_cancelled:
-                        status_note = "❌ RECENTLY CANCELLED"
-                    elif is_recently_filled:
-                        status_note = "🏁 FILLED (MARKET ORDER)"
-                    else:
-                        status_note = "🏁 RECENT"
-                    # Fix timestamp display for logging
-                    timestamp_display = datetime.utcfromtimestamp(order_time / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                    logger.info(f"🎯 Found order {status_note}: {order['symbol']} {order['side']} {order['origQty']} - Status: {order_status} - Time: {timestamp_display}")
-                else:
-                    # Log why orders are being filtered out (only for debug level)
-                    if order_id in seen_orders:
-                        logger.debug(f"⏭️ Skipping duplicate order: {order_id}")
-                    elif order['side'] not in ['BUY', 'SELL']:
-                        logger.debug(f"⏭️ Skipping non-trading order: {order_id} (side: {order['side']})")
-                    elif not (is_open_order or is_recently_filled or is_recently_cancelled):
-                        timestamp_display = datetime.utcfromtimestamp(order_time / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                        five_min_display = datetime.utcfromtimestamp(five_minutes_ago / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                        logger.debug(f"⏭️ Skipping old order: {order_id} (time: {timestamp_display}, threshold: {five_min_display})")
-            
-            logger.info(f"✅ Found {len(relevant_orders)} relevant orders (open + recent)")
-            return relevant_orders
-            
+            open_orders = await client.get_open_orders()
+            return open_orders or []
         except Exception as e:
-            logger.error(f"❌ Error getting recent orders: {e}")
+            logger.error(f"Error fetching open orders: {e}")
             return []
     
     async def check_database_trades(self, master_id: int, last_check: datetime):
