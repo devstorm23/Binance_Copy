@@ -547,7 +547,7 @@ async def debug_orders(account_id: int, db = Depends(get_db)):
             "open_orders": open_orders,
             "recent_orders_count": len(recent_orders),
             "recent_orders": recent_orders,
-            "processed_orders": list(copy_trading_engine.processed_orders.get(account_id, set())),
+            "processed_orders": [],  # Removed duplicate tracking
             "timestamp": datetime.utcnow()
         }
         
@@ -600,19 +600,8 @@ async def debug_process_order(account_id: int, order_id: str, db = Depends(get_d
 
 @app.post("/debug/clear-processed/{account_id}")
 async def clear_processed_orders(account_id: int):
-    """Clear processed orders cache for an account (for debugging)"""
-    try:
-        if account_id in copy_trading_engine.processed_orders:
-            count = len(copy_trading_engine.processed_orders[account_id])
-            copy_trading_engine.processed_orders[account_id].clear()
-            logger.info(f"🧹 Cleared {count} processed orders for account {account_id}")
-            return {"message": f"Cleared {count} processed orders for account {account_id}"}
-        else:
-            return {"message": f"No processed orders found for account {account_id}"}
-            
-    except Exception as e:
-        logger.error(f"Error clearing processed orders: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Legacy endpoint - duplicate tracking removed"""
+    return {"message": "Duplicate tracking has been removed from the system"}
 
 # System logs
 @app.get("/logs", response_model=List[Dict])

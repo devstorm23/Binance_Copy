@@ -207,38 +207,10 @@ class CopyTradingEngine:
             return 0
     
     async def initialize_order_tracking(self):
-        """Initialize order tracking to prevent duplicates on restart"""
+        """Simplified initialization without duplicate tracking"""
         try:
-            logger.info("🔄 Initializing order tracking to prevent restart duplicates...")
-            current_time = datetime.utcnow()
-            
-            # Set last processed time to current time for all master accounts
-            # This prevents processing old orders when the bot restarts
-            for master_id in self.master_clients.keys():
-                self.last_processed_order_time[master_id] = current_time
-                self.processed_orders[master_id] = set()
-                logger.info(f"🕒 Set last processed time for master {master_id} to {current_time}")
-                
-                # Also log recent database trades to avoid reprocessing
-                try:
-                    session = get_session()
-                    recent_trades = session.query(Trade).filter(
-                        Trade.account_id == master_id,
-                        Trade.created_at >= current_time - timedelta(hours=24)  # Last 24 hours
-                    ).all()
-                    
-                    for trade in recent_trades:
-                        if trade.binance_order_id:
-                            self.processed_orders[master_id].add(str(trade.binance_order_id))
-                    
-                    logger.info(f"📋 Loaded {len(recent_trades)} recent orders for master {master_id} to prevent duplicates")
-                    session.close()
-                    
-                except Exception as db_error:
-                    logger.warning(f"⚠️ Could not load recent orders for master {master_id}: {db_error}")
-                    
-            self.add_system_log("INFO", "🔄 Order tracking initialized - old orders will not be reprocessed on restart")
-            
+            logger.info("🔄 Initializing order tracking...")
+            self.add_system_log("INFO", "🔄 Order tracking initialized")
         except Exception as e:
             logger.error(f"Failed to initialize order tracking: {e}")
             self.add_system_log("ERROR", f"Failed to initialize order tracking: {e}")
@@ -347,9 +319,7 @@ class CopyTradingEngine:
             # Set last trade check to server start time to ensure startup protection
             self.last_trade_check[master_id] = self.server_start_time
             logger.info(f"🕐 Set last_trade_check for master {master_id} to {self.server_start_time}")
-            # Initialize processed orders tracking for this master
-            if master_id not in self.processed_orders:
-                self.processed_orders[master_id] = set()
+# Removed processed orders tracking
             # Initialize startup tracking
             if master_id not in self.startup_complete:
                 self.startup_complete[master_id] = False
