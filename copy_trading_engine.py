@@ -702,23 +702,23 @@ class CopyTradingEngine:
             # AGGRESSIVE PROTECTION: Only process very recent orders
             five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
             
-            # IMPROVED CANCELLATION HANDLING: Process recent cancellations even during startup
+            # IMPROVED CANCELLATION HANDLING: Process cancellations using updateTime with a wider window
             if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']:
-                # Calculate how long the server has been running
                 server_uptime = datetime.utcnow() - self.server_start_time
                 logger.info(f"🕐 Server uptime: {server_uptime}")
                 
-                # Only process very recent cancelled orders (within last 2 minutes)
-                two_minutes_ago = datetime.utcnow() - timedelta(minutes=2)
-                if order_time < two_minutes_ago:
-                    logger.info(f"🛡️ OLD CANCELLED ORDER: Skipping cancelled order {order_id} from {order_time} (older than 2 minutes)")
+                # Use updateTime when available for recency
+                update_time_ms = int(order.get('updateTime', order.get('time', 0)))
+                update_time = datetime.utcfromtimestamp(update_time_ms / 1000) if update_time_ms else order_time
+                
+                # Allow cancelled orders within the past 30 minutes and after server start
+                thirty_minutes_ago = datetime.utcnow() - timedelta(minutes=30)
+                if update_time < max(self.server_start_time, thirty_minutes_ago):
+                    logger.info(f"🛡️ OLD CANCELLED ORDER: Skipping cancelled order {order_id} from {update_time} (before cutoff)")
                     return
                 
-                # Process recent cancellations to cancel follower orders
-                logger.info(f"🔄 PROCESSING RECENT CANCELLATION: {order_id} from {order_time} - will cancel follower orders")
-                
-                # For cancelled orders, we need to cancel corresponding follower orders
-                # Don't return here - let it process the cancellation
+                logger.info(f"🔄 PROCESSING CANCELLATION: {order_id} (updateTime={update_time}) - will cancel follower orders")
+                # Continue to cancellation handling below without returning here
             
             # For NEW orders (most important), be more lenient - allow up to 10 minutes
             elif order_status in ['NEW', 'PARTIALLY_FILLED']:
