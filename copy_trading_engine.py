@@ -456,9 +456,6 @@ class CopyTradingEngine:
                 logger.debug(f"Startup protection: skipping order {order_id} from {order_time} (before server start {self.server_start_time})")
                 return
             
-            # AGGRESSIVE PROTECTION: Only process very recent orders
-            five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
-            
             # POSITION CLOSING EXCEPTION: Check if this might be a position-closing order that should be processed regardless of age
             is_potentially_closing = False
             if order_status == 'FILLED' and order.get('type') == 'MARKET':
@@ -498,7 +495,6 @@ class CopyTradingEngine:
                     except Exception as e:
                         logger.debug(f"Could not perform quick position closing check: {e}")
             
-            # Apply time filters with position closing exception
             if not is_potentially_closing:
                 # IMPROVED CANCELLATION HANDLING: Process recent cancellations even during startup
                 if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']:
@@ -506,17 +502,8 @@ class CopyTradingEngine:
                     server_uptime = datetime.utcnow() - self.server_start_time
                     logger.info(f"🕐 Server uptime: {server_uptime}")
                     
-                    # Only process very recent cancelled orders (within last 2 minutes)
-                    # two_minutes_ago = datetime.utcnow() - timedelta(minutes=2)
-                    # if order_time < two_minutes_ago:
-                    #     logger.info(f"🛡️ OLD CANCELLED ORDER: Skipping cancelled order {order_id} from {order_time} (older than 2 minutes)")
-                    #     return
-                    
                     # Process recent cancellations to cancel follower orders
                     logger.info(f"🔄 PROCESSING RECENT CANCELLATION: {order_id} from {order_time} - will cancel follower orders")
-                    
-                    # For cancelled orders, we need to cancel corresponding follower orders
-                    # Don't return here - let it process the cancellation
                 
                 # For NEW orders (most important), be more lenient - allow up to 10 minutes
                 elif order_status in ['NEW', 'PARTIALLY_FILLED']:
@@ -537,44 +524,13 @@ class CopyTradingEngine:
                         logger.info(f"✅ FILLED ORDER (MARKET): Processing {order_id} from {order_time} - HIGH PRIORITY")
                         logger.info(f"🚀 MARKET ORDER DETAILS: {order['symbol']} {order['side']} {executed_qty} @ avg_price={order.get('avgPrice', 'N/A')}")
                 
-                # For all other orders, only process if within 5 minutes
-                elif order_time < five_minutes_ago:
-                    logger.info(f"🛡️ OLD ORDER FILTER: Skipping old order {order_id} from {order_time} (older than 5 minutes)")
-                    return
                 else:
                     logger.info(f"✅ Order {order_id} is recent - processing")
             else:
                 logger.info(f"🔄 POSITION CLOSING EXCEPTION: Processing order {order_id} from {order_time} (potential position closing order - bypassing time filters)")
             
-            # Removed duplicate checking to simplify processing
-            
             logger.info(f"🎯 Processing order {order_id} ({order_status})")
             logger.info(f"📋 Processing master order: {order['symbol']} {order['side']} {original_qty} - Status: {order_status}")
-            
-            # EARLY DUPLICATE CHECK: Prevent unnecessary database record creation
-            logger.info(f"🔍 EARLY CHECK: Verifying if order {order_id} was already processed")
-            temp_session = get_session()
-            
-            try:
-                # Check 1: Look for existing master trade with same binance_order_id
-                existing_master_trade = temp_session.query(Trade).filter(
-                    Trade.account_id == master_id,
-                    Trade.binance_order_id == str(order['orderId'])
-                ).first()
-                
-                if existing_master_trade:
-                    logger.info(f"📝 EARLY SKIP: Master trade already exists for Binance order {order['orderId']} (DB ID: {existing_master_trade.id})")
-                    temp_session.close()
-                    return
-                
-                logger.info(f"✅ EARLY CHECK PASSED: Order {order['orderId']} is new, proceeding with database creation")
-                
-            except Exception as e:
-                logger.error(f"❌ Error in early duplicate check: {e}")
-                # Continue processing even if duplicate check fails
-                
-            finally:
-                temp_session.close()
             
             # Create trade record in database (only if early checks passed)
             logger.info(f"💾 Creating database session...")
