@@ -546,7 +546,7 @@ class CopyTradingEngine:
             else:
                 logger.info(f"🔄 POSITION CLOSING EXCEPTION: Processing order {order_id} from {order_time} (potential position closing order - bypassing time filters)")
             
-# Removed duplicate checking to simplify processing
+            # Removed duplicate checking to simplify processing
             
             logger.info(f"🎯 Processing order {order_id} ({order_status})")
             logger.info(f"📋 Processing master order: {order['symbol']} {order['side']} {original_qty} - Status: {order_status}")
@@ -564,25 +564,6 @@ class CopyTradingEngine:
                 
                 if existing_master_trade:
                     logger.info(f"📝 EARLY SKIP: Master trade already exists for Binance order {order['orderId']} (DB ID: {existing_master_trade.id})")
-                    temp_session.close()
-                    return
-                
-                # Check 2: Look for recent follower trades that suggest this was already copied
-                recent_follower_trades = temp_session.query(Trade).filter(
-                    Trade.account_id.in_(
-                        temp_session.query(CopyTradingConfig.follower_account_id).filter(
-                            CopyTradingConfig.master_account_id == master_id,
-                            CopyTradingConfig.is_active == True
-                        )
-                    ),
-                    Trade.symbol == order['symbol'],
-                    Trade.side == order['side'],
-                    Trade.copied_from_master == True,
-                    Trade.created_at >= datetime.utcnow() - timedelta(minutes=30)
-                ).first()
-                
-                if recent_follower_trades:
-                    logger.info(f"📝 EARLY SKIP: Recent follower trade suggests order {order['orderId']} was already processed")
                     temp_session.close()
                     return
                 
