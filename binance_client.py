@@ -41,6 +41,30 @@ class BinanceClient:
         self.ws_connections = {}
         self.ws_tasks = {}
         
+        # Initialize timestamp synchronization
+        self._server_time_offset = 0
+        self._last_time_sync = 0
+        
+    async def _get_synchronized_timestamp(self) -> int:
+        """Get a synchronized timestamp for API requests"""
+        import time
+        current_time = int(time.time() * 1000)
+        
+        # Sync with server time every 30 seconds
+        if current_time - self._last_time_sync > 30000:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                server_time = await loop.run_in_executor(None, self.client.get_server_time)
+                self._server_time_offset = server_time['serverTime'] - current_time
+                self._last_time_sync = current_time
+                logger.debug(f"Updated server time offset: {self._server_time_offset}ms")
+            except Exception as e:
+                logger.warning(f"Failed to sync server time: {e}")
+                # Use existing offset if sync fails
+        
+        return current_time + self._server_time_offset
+        
     async def test_connection(self) -> bool:
         """Test API connection - works for both master accounts and subaccounts"""
         try:
@@ -272,11 +296,16 @@ class BinanceClient:
             # Check position mode to determine if we need positionSide
             is_hedge_mode = await self.get_position_mode()
             
+            # Get synchronized timestamp
+            timestamp = await self._get_synchronized_timestamp()
+            
             order_params = {
                 'symbol': symbol,
                 'side': side,
                 'type': 'MARKET',
-                'quantity': quantity
+                'quantity': quantity,
+                'timestamp': timestamp,
+                'recvWindow': 60000  # 60 seconds recvWindow
             }
             
             # For hedge mode, specify position side
@@ -312,6 +341,32 @@ class BinanceClient:
             logger.error(f"❌ Binance API Exception: {e}")
             logger.error(f"❌ Error code: {e.code}")
             logger.error(f"❌ Error message: {e.message}")
+            
+            # Handle timestamp sync issues
+            if e.code == -1021:  # Timestamp for this request is outside of the recvWindow
+                logger.warning(f"Timestamp sync issue - retrying with fresh timestamp...")
+                try:
+                    # Retry with fresh timestamp
+                    timestamp = await self._get_synchronized_timestamp()
+                    order_params['timestamp'] = timestamp
+                    order_params['recvWindow'] = 120000  # Larger recvWindow for retry
+                    
+                    order = await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: self.client.futures_create_order(**order_params)),
+                        timeout=8
+                    )
+                    
+                    if order:
+                        logger.info(f"✅ Market order placed successfully on retry: {symbol} {side} {quantity}")
+                        return order
+                    else:
+                        logger.error(f"❌ Order placement returned None response on retry!")
+                        raise Exception("Order placement returned None on retry")
+                        
+                except Exception as retry_error:
+                    logger.error(f"❌ Failed to place order on retry: {retry_error}")
+                    raise
+            
             raise
         except BinanceOrderException as e:
             logger.error(f"❌ Binance Order Exception: {e}")
@@ -334,13 +389,18 @@ class BinanceClient:
             # Check position mode to determine if we need positionSide
             is_hedge_mode = await self.get_position_mode()
             
+            # Get synchronized timestamp
+            timestamp = await self._get_synchronized_timestamp()
+            
             order_params = {
                 'symbol': symbol,
                 'side': side,
                 'type': 'LIMIT',
                 'timeInForce': 'GTC',
                 'quantity': quantity,
-                'price': price
+                'price': price,
+                'timestamp': timestamp,
+                'recvWindow': 60000  # 60 seconds recvWindow
             }
             
             # For hedge mode, specify position side
@@ -376,6 +436,32 @@ class BinanceClient:
             logger.error(f"❌ Binance API Exception: {e}")
             logger.error(f"❌ Error code: {e.code}")
             logger.error(f"❌ Error message: {e.message}")
+            
+            # Handle timestamp sync issues
+            if e.code == -1021:  # Timestamp for this request is outside of the recvWindow
+                logger.warning(f"Timestamp sync issue - retrying with fresh timestamp...")
+                try:
+                    # Retry with fresh timestamp
+                    timestamp = await self._get_synchronized_timestamp()
+                    order_params['timestamp'] = timestamp
+                    order_params['recvWindow'] = 120000  # Larger recvWindow for retry
+                    
+                    order = await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: self.client.futures_create_order(**order_params)),
+                        timeout=8
+                    )
+                    
+                    if order:
+                        logger.info(f"✅ Limit order placed successfully on retry: {symbol} {side} {quantity} @ {price}")
+                        return order
+                    else:
+                        logger.error(f"❌ Order placement returned None response on retry!")
+                        raise Exception("Order placement returned None on retry")
+                        
+                except Exception as retry_error:
+                    logger.error(f"❌ Failed to place order on retry: {retry_error}")
+                    raise
+            
             raise
         except BinanceOrderException as e:
             logger.error(f"❌ Binance Order Exception: {e}")
@@ -396,12 +482,17 @@ class BinanceClient:
             # Check position mode to determine if we need positionSide
             is_hedge_mode = await self.get_position_mode()
             
+            # Get synchronized timestamp
+            timestamp = await self._get_synchronized_timestamp()
+            
             order_params = {
                 'symbol': symbol,
                 'side': side,
                 'type': 'STOP_MARKET',
                 'quantity': quantity,
-                'stopPrice': stop_price
+                'stopPrice': stop_price,
+                'timestamp': timestamp,
+                'recvWindow': 60000  # 60 seconds recvWindow
             }
             
             # For hedge mode, specify position side
@@ -435,12 +526,17 @@ class BinanceClient:
             # Check position mode to determine if we need positionSide
             is_hedge_mode = await self.get_position_mode()
             
+            # Get synchronized timestamp
+            timestamp = await self._get_synchronized_timestamp()
+            
             order_params = {
                 'symbol': symbol,
                 'side': side,
                 'type': 'TAKE_PROFIT_MARKET',
                 'quantity': quantity,
-                'stopPrice': stop_price
+                'stopPrice': stop_price,
+                'timestamp': timestamp,
+                'recvWindow': 60000  # 60 seconds recvWindow
             }
             
             # For hedge mode, specify position side
@@ -468,7 +564,19 @@ class BinanceClient:
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         """Cancel an order"""
         try:
-            result = self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            
+            # Get synchronized timestamp
+            timestamp = await self._get_synchronized_timestamp()
+            
+            # Cancel order with proper timestamp and increased recvWindow
+            result = await loop.run_in_executor(None, lambda: self.client.futures_cancel_order(
+                symbol=symbol, 
+                orderId=order_id,
+                timestamp=timestamp,
+                recvWindow=60000  # 60 seconds recvWindow to handle time sync issues
+            ))
             logger.info(f"Order cancelled: {symbol} {order_id}")
             return True
         except BinanceAPIException as e:
@@ -476,6 +584,22 @@ class BinanceClient:
             if e.code == -2011:  # Unknown order sent
                 logger.info(f"Order {order_id} for {symbol} was already cancelled or doesn't exist")
                 return True
+            elif e.code == -1021:  # Timestamp for this request is outside of the recvWindow
+                logger.warning(f"Timestamp sync issue for order {order_id} - retrying with fresh timestamp...")
+                # Retry with fresh timestamp
+                try:
+                    timestamp = await self._get_synchronized_timestamp()
+                    result = await loop.run_in_executor(None, lambda: self.client.futures_cancel_order(
+                        symbol=symbol, 
+                        orderId=order_id,
+                        timestamp=timestamp,
+                        recvWindow=120000  # Even larger recvWindow for retry
+                    ))
+                    logger.info(f"Order cancelled on retry: {symbol} {order_id}")
+                    return True
+                except Exception as retry_error:
+                    logger.error(f"Failed to cancel order on retry: {retry_error}")
+                    return False
             else:
                 logger.error(f"Failed to cancel order: {e}")
                 return False
@@ -512,12 +636,17 @@ class BinanceClient:
             # Check position mode to determine if we need positionSide
             is_hedge_mode = await self.get_position_mode()
             
+            # Get synchronized timestamp
+            timestamp = await self._get_synchronized_timestamp()
+            
             order_params = {
                 'symbol': symbol,
                 'side': close_side,
                 'type': 'MARKET',
                 'quantity': close_quantity,
-                'reduceOnly': True  # This ensures we're closing, not opening new positions
+                'reduceOnly': True,  # This ensures we're closing, not opening new positions
+                'timestamp': timestamp,
+                'recvWindow': 60000  # 60 seconds recvWindow
             }
             
             # For hedge mode, specify position side
