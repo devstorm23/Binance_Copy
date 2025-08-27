@@ -693,6 +693,70 @@ class BinanceClient:
             logger.warning(f"Failed to get open orders (possibly limited permissions): {e}")
             return []
 
+    async def get_recent_orders(self, symbol: str = None, limit: int = 50) -> List[Dict]:
+        """Get recent orders (including filled ones) for a symbol or all symbols"""
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            
+            # Get synchronized timestamp
+            timestamp = await self._get_synchronized_timestamp()
+            
+            if symbol:
+                orders = await loop.run_in_executor(None, lambda: self.client.futures_get_all_orders(
+                    symbol=symbol,
+                    limit=limit,
+                    timestamp=timestamp,
+                    recvWindow=60000
+                ))
+            else:
+                # For all symbols, we need to get orders for each symbol we're tracking
+                # This is more complex, so let's start with symbol-specific calls
+                logger.warning("get_recent_orders called without symbol - this may not work as expected")
+                return []
+            
+            logger.info(f"Retrieved {len(orders)} recent orders" + (f" for {symbol}" if symbol else ""))
+            return orders
+        except BinanceAPIException as e:
+            if e.code == -2015:  # Permission denied
+                logger.warning(f"⚠️ Recent orders access denied (Code -2015) - account has limited permissions")
+                return []
+            else:
+                logger.error(f"Failed to get recent orders: {e}")
+                return []
+        except Exception as e:
+            logger.warning(f"Failed to get recent orders (possibly limited permissions): {e}")
+            return []
+
+    async def get_order_status(self, symbol: str, order_id: str) -> Dict:
+        """Get the current status of a specific order"""
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            
+            # Get synchronized timestamp
+            timestamp = await self._get_synchronized_timestamp()
+            
+            order = await loop.run_in_executor(None, lambda: self.client.futures_get_order(
+                symbol=symbol,
+                orderId=order_id,
+                timestamp=timestamp,
+                recvWindow=60000
+            ))
+            
+            logger.info(f"Retrieved order status: {order_id} - {order.get('status', 'UNKNOWN')}")
+            return order
+        except BinanceAPIException as e:
+            if e.code == -2011:  # Unknown order sent
+                logger.info(f"Order {order_id} not found (likely already filled/cancelled)")
+                return None
+            else:
+                logger.error(f"Failed to get order status: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to get order status: {e}")
+            return None
+
     async def get_symbol_info(self, symbol: str) -> Dict:
         """Get symbol information"""
         try:

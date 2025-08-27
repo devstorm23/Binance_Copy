@@ -29,6 +29,7 @@ class CopyTradingEngine:
         self.startup_complete = {}  # account_id -> bool to track if startup processing is complete
         self.server_start_time = datetime.utcnow()  # Track when the server started
         self.master_open_orders_cache = {}  # account_id -> {orderId: order_dict}
+        self.processed_orders_cache = {}  # account_id -> set of processed order IDs
         logger.info(f"🏗️ CopyTradingEngine initialized at {self.server_start_time}")
         logger.info(f"🕐 Server startup time (timestamp): {self.server_start_time.timestamp()}")
         
@@ -404,38 +405,124 @@ class CopyTradingEngine:
                 for order in all_orders:
                     await self.process_master_order(master_id, order)
 
-                # Detect cancellations by comparing previous cache with current
+                # Detect order status changes by comparing previous cache with current
                 for prev_id, prev_order in prev_cache.items():
                     if prev_id not in current_cache:
-                        # Order disappeared from open orders; fetch its latest status once
+                        # Order disappeared from open orders; check its actual status
+                        logger.info(f"🧭 Order {prev_id} disappeared from open orders - checking actual status...")
                         try:
-                            # Binance doesn't provide direct get_order by id without symbol in cache here.
-                            # Construct a minimal cancellation event to drive cancellation handling.
-                            synthetic = {
-                                'orderId': prev_order['orderId'],
-                                'symbol': prev_order['symbol'],
-                                'side': prev_order.get('side', 'BUY'),
-                                'status': 'CANCELED',
-                                'time': prev_order.get('time', int(datetime.utcnow().timestamp() * 1000)),
-                                'updateTime': int(datetime.utcnow().timestamp() * 1000),
-                                'origQty': prev_order.get('origQty', prev_order.get('quantity', '0')),
-                                'type': prev_order.get('type', 'LIMIT')
-                            }
-                            logger.info(f"🧭 Detected order removal from open book, treating as CANCELED: {prev_id}")
-                            await self.process_master_order(master_id, synthetic)
-                        except Exception as synth_err:
-                            logger.warning(f"⚠️ Failed to synthesize cancellation for order {prev_id}: {synth_err}")
+                            # Get the actual order status from Binance
+                            actual_order = await client.get_order_status(
+                                symbol=prev_order['symbol'],
+                                order_id=prev_order['orderId']
+                            )
+                            
+                            if actual_order:
+                                # Process the order with its actual status
+                                logger.info(f"✅ Found actual order status: {prev_id} - {actual_order.get('status', 'UNKNOWN')}")
+                                await self.process_master_order(master_id, actual_order)
+                            else:
+                                # Order not found, likely already processed or expired
+                                logger.info(f"ℹ️ Order {prev_id} not found in recent orders - likely already processed")
+                                
+                        except Exception as status_err:
+                            logger.warning(f"⚠️ Failed to get status for order {prev_id}: {status_err}")
+                            # Fallback: treat as cancelled if we can't get the status
+                            try:
+                                synthetic = {
+                                    'orderId': prev_order['orderId'],
+                                    'symbol': prev_order['symbol'],
+                                    'side': prev_order.get('side', 'BUY'),
+                                    'status': 'CANCELED',
+                                    'time': prev_order.get('time', int(datetime.utcnow().timestamp() * 1000)),
+                                    'updateTime': int(datetime.utcnow().timestamp() * 1000),
+                                    'origQty': prev_order.get('origQty', prev_order.get('quantity', '0')),
+                                    'type': prev_order.get('type', 'LIMIT')
+                                }
+                                logger.info(f"🧭 Fallback: treating order {prev_id} as CANCELLED")
+                                await self.process_master_order(master_id, synthetic)
+                            except Exception as synth_err:
+                                logger.warning(f"⚠️ Failed to synthesize cancellation for order {prev_id}: {synth_err}")
 
-                # Update cache
-                self.master_open_orders_cache[master_id] = current_cache
-            except Exception as e:
-                logger.warning(f"Failed to get open orders for master {master_id}: {e}")
-            
-            # Update last check time
-            self.last_trade_check[master_id] = datetime.utcnow()
+                            # Update cache
+            self.master_open_orders_cache[master_id] = current_cache
+        except Exception as e:
+            logger.warning(f"Failed to get open orders for master {master_id}: {e}")
+        
+        # Periodically check for recent filled orders that might have been missed
+        await self.check_recent_filled_orders(master_id, client)
+        
+        # Update last check time
+        self.last_trade_check[master_id] = datetime.utcnow()
             
         except Exception as e:
             logger.error(f"Error checking master trades: {e}")
+
+    async def check_recent_filled_orders(self, master_id: int, client: BinanceClient):
+        """Check for recent filled orders that might have been missed by the main monitoring"""
+        try:
+            # Only check every 10 cycles to avoid excessive API calls
+            current_time = datetime.utcnow()
+            last_filled_check = getattr(self, '_last_filled_check', {}).get(master_id)
+            
+            if last_filled_check and (current_time - last_filled_check).total_seconds() < 300:  # 5 minutes
+                return
+            
+            logger.info(f"🔍 Checking for recent filled orders for master {master_id}...")
+            
+            # Get recent orders for symbols we're tracking
+            # For now, let's check common symbols or get from existing trades
+            session = get_session()
+            try:
+                # Get symbols from recent master trades
+                recent_trades = session.query(Trade).filter(
+                    Trade.account_id == master_id,
+                    Trade.created_at >= current_time - timedelta(hours=24)  # Last 24 hours
+                ).all()
+                
+                symbols_to_check = list(set([trade.symbol for trade in recent_trades]))
+                
+                if not symbols_to_check:
+                    logger.info(f"ℹ️ No recent trades found for master {master_id} - skipping filled order check")
+                    return
+                
+                logger.info(f"🔍 Checking filled orders for symbols: {symbols_to_check}")
+                
+                for symbol in symbols_to_check:
+                    try:
+                        recent_orders = await client.get_recent_orders(symbol=symbol, limit=20)
+                        
+                        for order in recent_orders:
+                            order_id = str(order['orderId'])
+                            order_status = order['status']
+                            
+                            # Only process FILLED orders that we haven't seen before
+                            if order_status == 'FILLED':
+                                # Check if we already have this order in our database
+                                existing_trade = session.query(Trade).filter(
+                                    Trade.account_id == master_id,
+                                    Trade.binance_order_id == order_id
+                                ).first()
+                                
+                                if not existing_trade:
+                                    logger.info(f"🎯 Found missed FILLED order: {order_id} for {symbol}")
+                                    await self.process_master_order(master_id, order)
+                                else:
+                                    logger.debug(f"ℹ️ FILLED order {order_id} already processed")
+                                    
+                    except Exception as symbol_error:
+                        logger.warning(f"⚠️ Failed to check filled orders for {symbol}: {symbol_error}")
+                        
+            finally:
+                session.close()
+            
+            # Update last check time
+            if not hasattr(self, '_last_filled_check'):
+                self._last_filled_check = {}
+            self._last_filled_check[master_id] = current_time
+            
+        except Exception as e:
+            logger.error(f"Error checking recent filled orders: {e}")
 
     async def process_master_order(self, master_id: int, order: dict):
         """Process an order from master account (open, partially filled, or filled)"""
@@ -547,6 +634,24 @@ class CopyTradingEngine:
                 logger.error(f"❌ Error in early duplicate check: {e}")
             finally:
                 temp_session.close()
+            
+            # Check if we've already processed this order in this session
+            if master_id not in self.processed_orders_cache:
+                self.processed_orders_cache[master_id] = set()
+            
+            if order_id in self.processed_orders_cache[master_id]:
+                logger.info(f"⏭️ Order {order_id} already processed in this session - skipping")
+                return
+            
+            # Mark this order as being processed
+            self.processed_orders_cache[master_id].add(order_id)
+            
+            # Clean up old processed orders (keep only last 1000)
+            if len(self.processed_orders_cache[master_id]) > 1000:
+                # Convert to list, take last 1000, convert back to set
+                processed_list = list(self.processed_orders_cache[master_id])
+                self.processed_orders_cache[master_id] = set(processed_list[-1000:])
+                logger.debug(f"🧹 Cleaned up processed orders cache for master {master_id}")
             
             # Create trade record in database (only if early checks passed)
             logger.info(f"💾 Creating database session...")
