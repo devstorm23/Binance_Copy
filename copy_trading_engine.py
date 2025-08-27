@@ -504,33 +504,49 @@ class CopyTradingEngine:
                     
                     # Process recent cancellations to cancel follower orders
                     logger.info(f"🔄 PROCESSING RECENT CANCELLATION: {order_id} from {order_time} - will cancel follower orders")
-                
-                # For NEW orders (most important), be more lenient - allow up to 10 minutes
-                elif order_status in ['NEW', 'PARTIALLY_FILLED']:
-                    ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
-                    if order_time < ten_minutes_ago:
-                        logger.info(f"🛡️ OLD NEW ORDER FILTER: Skipping old NEW order {order_id} from {order_time} (older than 10 minutes)")
-                        return
-                    else:
-                        logger.info(f"🚀 NEW ORDER DETECTED: Processing {order_id} from {order_time} - PRIORITY")
-                
-                # For FILLED orders (market orders), allow up to 10 minutes for better detection
-                elif order_status == 'FILLED':
-                    ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
-                    if order_time < ten_minutes_ago:
-                        logger.info(f"🛡️ OLD FILLED ORDER FILTER: Skipping old FILLED order {order_id} from {order_time} (older than 10 minutes)")
-                        return
-                    else:
-                        logger.info(f"✅ FILLED ORDER (MARKET): Processing {order_id} from {order_time} - HIGH PRIORITY")
-                        logger.info(f"🚀 MARKET ORDER DETAILS: {order['symbol']} {order['side']} {executed_qty} @ avg_price={order.get('avgPrice', 'N/A')}")
-                
+           
                 else:
                     logger.info(f"✅ Order {order_id} is recent - processing")
             else:
                 logger.info(f"🔄 POSITION CLOSING EXCEPTION: Processing order {order_id} from {order_time} (potential position closing order - bypassing time filters)")
             
+            # Removed duplicate checking to simplify processing
+            
             logger.info(f"🎯 Processing order {order_id} ({order_status})")
             logger.info(f"📋 Processing master order: {order['symbol']} {order['side']} {original_qty} - Status: {order_status}")
+            
+            # EARLY DUPLICATE CHECK: Prevent unnecessary database record creation
+            # BUT allow processing of cancellations even if master trade exists
+            logger.info(f"🔍 EARLY CHECK: Verifying if order {order_id} was already processed")
+            temp_session = get_session()
+            
+            # Flag to track if we should skip database creation for cancellations
+            skip_db_creation = False
+            
+            try:
+                existing_master_trade = temp_session.query(Trade).filter(
+                    Trade.account_id == master_id,
+                    Trade.binance_order_id == str(order['orderId'])
+                ).first()
+                
+                if existing_master_trade:
+                    # SPECIAL CASE: Allow processing of cancellations even if master trade exists
+                    if order_status in ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']:
+                        logger.info(f"✅ EARLY CHECK: Master trade exists for cancelled order {order['orderId']} (DB ID: {existing_master_trade.id}) - proceeding with cancellation")
+                        temp_session.close()
+                        skip_db_creation = True  # Skip creating new database record
+                        # Continue processing to handle cancellation
+                    else:
+                        logger.info(f"📝 EARLY SKIP: Master trade already exists for Binance order {order['orderId']} (DB ID: {existing_master_trade.id}) - skipping")
+                        temp_session.close()
+                        return
+                else:
+                    logger.info(f"✅ EARLY CHECK PASSED: Order {order['orderId']} is new, proceeding with database creation")
+                
+            except Exception as e:
+                logger.error(f"❌ Error in early duplicate check: {e}")
+            finally:
+                temp_session.close()
             
             # Create trade record in database (only if early checks passed)
             logger.info(f"💾 Creating database session...")
@@ -603,29 +619,34 @@ class CopyTradingEngine:
                 session.close()
                 return
             
-            db_trade = Trade(
-                account_id=master_id,
-                symbol=order['symbol'],
-                side=order['side'],
-                order_type=order['type'],
-                quantity=quantity_to_record,
-                price=price_to_record,
-                status=db_status,
-                binance_order_id=str(order['orderId']),
-                copied_from_master=False
-            )
-            
-            logger.info(f"💾 Adding trade to database...")
-            session.add(db_trade)
-            logger.info(f"💾 Committing trade to database...")
-            session.commit()
-            logger.info(f"💾 Refreshing trade from database...")
-            session.refresh(db_trade)
-            logger.info(f"✅ Trade {db_trade.id} saved to database successfully")
+            # Only create database record if we're not skipping for cancellations
+            if not skip_db_creation:
+                db_trade = Trade(
+                    account_id=master_id,
+                    symbol=order['symbol'],
+                    side=order['side'],
+                    order_type=order['type'],
+                    quantity=quantity_to_record,
+                    price=price_to_record,
+                    status=db_status,
+                    binance_order_id=str(order['orderId']),
+                    copied_from_master=False
+                )
+                
+                logger.info(f"💾 Adding trade to database...")
+                session.add(db_trade)
+                logger.info(f"💾 Committing trade to database...")
+                session.commit()
+                logger.info(f"💾 Refreshing trade from database...")
+                session.refresh(db_trade)
+                logger.info(f"✅ Trade {db_trade.id} saved to database successfully")
+            else:
+                logger.info(f"⏭️ Skipping database record creation for cancellation order {order_id}")
+                db_trade = None
             
             # Copy to followers for NEW orders and FILLED orders  
             # Also handle case where we missed the NEW state and only see FILLED
-            if order_status in ['NEW', 'FILLED']:
+            if order_status in ['NEW', 'FILLED'] and db_trade is not None:
                 logger.info(f"🚀 PROCESSING {order_status} ORDER: About to copy {order_status.lower()} order to followers")
                 
                 # Early duplicate check already performed - proceed with copying
@@ -653,7 +674,7 @@ class CopyTradingEngine:
                     logger.info(f"📈 REGULAR TRADE DETECTED: Copying to followers as new trade")
                     await self.copy_trade_to_followers(db_trade, session)
                     
-            elif order_status == 'PARTIALLY_FILLED':
+            elif order_status == 'PARTIALLY_FILLED' and db_trade is not None:
                 # For partially filled orders, early duplicate check already handled duplicates
                 logger.info(f"🚀 PARTIALLY_FILLED order processing (early duplicate check already passed)")
                 
@@ -670,6 +691,8 @@ class CopyTradingEngine:
                 else:
                     logger.info(f"📈 Regular trade order - copying to followers")
                     await self.copy_trade_to_followers(db_trade, session)
+            elif db_trade is None:
+                logger.info(f"⚠️ No database trade record available for order {order_id} - skipping follower operations")
             else:
                 logger.info(f"📝 Order recorded but not copied (status: {order_status})")
             
